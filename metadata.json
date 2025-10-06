@@ -1,0 +1,7 @@
+{
+  "name": "SkellyTune Audio Prep",
+  "description": "An application to normalize and split audio files into 30-second segments, perfect for use with audio-reactive decorations like the Decor Pro SVI Halloween skeleton.",
+  "requestFramePermissions": [
+    "bluetooth"
+  ]
+}
