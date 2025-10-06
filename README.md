@@ -1,20 +1,24 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Bob the Skelly
 
-# Run and deploy your AI Studio app
+This project provides a web-based interface for preparing audio files and controlling a "Skelly" Bluetooth device.
 
-This contains everything you need to run your app locally.
+The primary purpose of this tool is to process audio files for use with the Skelly device. This involves normalizing volume, applying compression, and splitting the audio into segments. It also provides a direct interface for controlling the device via Bluetooth.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1JY-L9ELL5JVVj5SM5SmY1FxHPlekc189
+## Installation and Usage
 
-## Run Locally
+**1. Frontend:**
 
-**Prerequisites:**  Node.js
+```sh
+npm install
+npm run dev
+```
 
+**2. Python Backend:**
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```sh
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload
+```

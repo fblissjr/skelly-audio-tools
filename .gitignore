@@ -113,6 +113,10 @@ dist
 # FuseBox cache
 .fusebox/
 
+# Reference
+.coderef/
+.internal/
+
 # DynamoDB Local files
 .dynamodb/
 

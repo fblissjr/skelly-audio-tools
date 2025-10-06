@@ -10,6 +10,8 @@ export interface AudioSegment {
   originalWaveform: WaveformData;
   processedWaveform: WaveformData;
   volume: number; // Volume multiplier, 1.0 is default
+  fadeInDuration: number; // in seconds
+  fadeOutDuration: number; // in seconds
 }
 
 export interface ProcessedAudioResult {

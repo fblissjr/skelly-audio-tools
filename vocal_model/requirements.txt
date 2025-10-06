@@ -1,0 +1,11 @@
+torch
+numpy
+soundfile
+librosa
+tqdm
+pyyaml
+omegaconf
+safetensors
+einops
+beartype
+rotary_embedding_torch

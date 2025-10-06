@@ -200,6 +200,8 @@ export async function processAudio(
         originalWaveform: generateWaveformData(originalSegmentBuffer, WAVEFORM_WIDTH),
         processedWaveform: generateWaveformData(renderedBuffer, WAVEFORM_WIDTH),
         volume: 1.0,
+        fadeInDuration: 0,
+        fadeOutDuration: 0,
     });
   }
 
@@ -207,12 +209,17 @@ export async function processAudio(
 }
 
 /**
- * Applies a volume adjustment to an audio blob.
+ * Applies volume, fade-in, and fade-out adjustments to an audio blob.
  * @param originalBlobUrl The URL of the blob to process.
- * @param volume The volume multiplier (e.g., 1.0 is no change).
- * @returns A new Blob with the volume adjusted.
+ * @param effects An object containing volume, fadeInDuration, and fadeOutDuration.
+ * @returns A new Blob with the effects applied.
  */
-export async function applyVolumeToSegment(originalBlobUrl: string, volume: number): Promise<Blob> {
+export async function applyEffectsToSegment(
+    originalBlobUrl: string, 
+    effects: { volume: number; fadeInDuration: number; fadeOutDuration: number; }
+): Promise<Blob> {
+    const { volume, fadeInDuration, fadeOutDuration } = effects;
+
     const audioContext = new AudioContext();
     const response = await fetch(originalBlobUrl);
     const arrayBuffer = await response.arrayBuffer();
@@ -228,11 +235,39 @@ export async function applyVolumeToSegment(originalBlobUrl: string, volume: numb
     source.buffer = decodedBuffer;
 
     const gainNode = offlineContext.createGain();
-    gainNode.gain.value = volume;
 
     source.connect(gainNode);
     gainNode.connect(offlineContext.destination);
-    source.start();
+    
+    const { duration } = decodedBuffer;
+    const { gain } = gainNode;
+
+    // Sanitize fade durations
+    let effectiveFadeIn = Math.max(0, Math.min(fadeInDuration, duration));
+    let effectiveFadeOut = Math.max(0, Math.min(fadeOutDuration, duration));
+
+    if (effectiveFadeIn + effectiveFadeOut > duration) {
+        // Fades overlap, prioritize fade-in and shorten fade-out
+        effectiveFadeOut = duration - effectiveFadeIn;
+    }
+
+    const fadeOutStartTime = duration - effectiveFadeOut;
+
+    // Schedule gain changes
+    gain.setValueAtTime(0, 0); // Start at silence
+    if (effectiveFadeIn > 0) {
+        gain.linearRampToValueAtTime(volume, effectiveFadeIn);
+    } else {
+        gain.setValueAtTime(volume, 0); // No fade in, jump immediately to target volume
+    }
+
+    if (effectiveFadeOut > 0 && fadeOutStartTime > effectiveFadeIn) {
+        // Ensure volume is stable before fade out begins
+        gain.setValueAtTime(volume, fadeOutStartTime);
+        gain.linearRampToValueAtTime(0, duration);
+    }
+
+    source.start(0);
 
     const renderedBuffer = await offlineContext.startRendering();
     await audioContext.close();

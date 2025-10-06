@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { AudioSegment, WaveformData } from '../types';
 import Waveform from './Waveform';
-import { applyVolumeToSegment } from '../services/audioProcessor';
+import { applyEffectsToSegment } from '../services/audioProcessor';
 
 
 // Inform TypeScript that JSZip is available globally from the script tag in index.html
@@ -16,17 +16,54 @@ const formatTime = (seconds: number): string => {
 const WaveformDisplay: React.FC<{ title: string; data: WaveformData; color: string }> = ({ title, data, color }) => (
     <div className="flex-1 p-2 bg-slate-700/50 rounded-md">
         <p className="text-xs font-bold text-center text-slate-400 uppercase tracking-wider mb-1">{title}</p>
-        <Waveform data={data} width={200} height={50} color={color} />
+        <Waveform data={data} height={50} color={color} />
+    </div>
+);
+
+const EffectSlider: React.FC<{
+    label: string;
+    icon: string;
+    value: number;
+    min?: number;
+    max: number;
+    step?: number;
+    unit: string;
+    onChange: (value: number) => void;
+}> = ({ label, icon, value, min = 0, max, step = 0.01, unit, onChange }) => (
+    <div>
+        <div className="flex justify-between items-center text-sm mb-1">
+            <label htmlFor={`${label}-slider`} className="font-medium text-slate-300 flex items-center">
+                <i className={`ph-bold ${icon} mr-2 text-slate-400`}></i>
+                {label}
+            </label>
+            <span className="font-mono text-orange-400">{value.toFixed(unit === '%' ? 0 : 2)}{unit}</span>
+        </div>
+        <input
+            id={`${label}-slider`}
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            onChange={(e) => onChange(parseFloat(e.target.value))}
+            className="w-full h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-orange-500"
+            aria-label={label}
+        />
     </div>
 );
 
 
-const SegmentCard: React.FC<{ segment: AudioSegment, onVolumeChange: (id: number, volume: number) => void; }> = ({ segment, onVolumeChange }) => {
+const SegmentCard: React.FC<{ 
+    segment: AudioSegment, 
+    onSettingsChange: (id: number, settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>) => void; 
+}> = ({ segment, onSettingsChange }) => {
     const startTimeFormatted = formatTime(segment.startTime);
     const endTimeFormatted = formatTime(segment.startTime + segment.duration);
     const audioRef = useRef<HTMLAudioElement>(null);
     const [isDownloading, setIsDownloading] = useState(false);
 
+    // This useEffect allows the native audio player's volume to be controlled
+    // by our custom volume slider for a better preview experience.
     useEffect(() => {
         if (audioRef.current) {
             audioRef.current.volume = segment.volume;
@@ -36,7 +73,8 @@ const SegmentCard: React.FC<{ segment: AudioSegment, onVolumeChange: (id: number
     const handleDownload = async () => {
         setIsDownloading(true);
         try {
-            const adjustedBlob = await applyVolumeToSegment(segment.blobUrl, segment.volume);
+            const { volume, fadeInDuration, fadeOutDuration } = segment;
+            const adjustedBlob = await applyEffectsToSegment(segment.blobUrl, { volume, fadeInDuration, fadeOutDuration });
             const url = URL.createObjectURL(adjustedBlob);
             const a = document.createElement('a');
             a.href = url;
@@ -54,56 +92,76 @@ const SegmentCard: React.FC<{ segment: AudioSegment, onVolumeChange: (id: number
 
 
     return (
-        <div className="bg-slate-800 rounded-lg p-4 flex flex-col lg:flex-row items-center justify-between space-y-4 lg:space-y-0 lg:space-x-4 border border-slate-700 shadow-md">
-            <div className="w-full lg:w-auto flex items-center space-x-4">
-                <div className="flex-shrink-0 w-12 h-12 rounded-md bg-orange-500/20 text-orange-400 flex items-center justify-center font-bold text-xl">
-                    {segment.id + 1}
+        <div className="bg-slate-800 rounded-lg p-4 flex flex-col lg:flex-row items-start justify-between gap-6 border border-slate-700 shadow-md">
+            {/* Left side: Info and Waveforms */}
+            <div className="w-full lg:flex-1 space-y-4">
+                <div className="flex items-center space-x-4">
+                    <div className="flex-shrink-0 w-12 h-12 rounded-md bg-orange-500/20 text-orange-400 flex items-center justify-center font-bold text-xl">
+                        {segment.id + 1}
+                    </div>
+                    <div>
+                        <p className="font-semibold text-slate-100">{segment.name}</p>
+                        <p className="text-sm text-slate-400">
+                            Time: {startTimeFormatted} - {endTimeFormatted}
+                        </p>
+                    </div>
                 </div>
-                <div>
-                    <p className="font-semibold text-slate-100">{segment.name}</p>
-                    <p className="text-sm text-slate-400">
-                        Time: {startTimeFormatted} - {endTimeFormatted}
-                    </p>
-                </div>
-            </div>
-            
-            <div className="w-full lg:flex-grow flex flex-col md:flex-row items-center space-y-4 md:space-y-0 md:space-x-4">
-                <div className="w-full md:w-auto flex-grow flex items-center space-x-2">
+                <div className="w-full flex items-center space-x-2">
                     <WaveformDisplay title="Before" data={segment.originalWaveform} color="#a8a29e" />
                     <i className="ph-bold ph-arrow-right text-slate-500 text-xl"></i>
                     <WaveformDisplay title="After" data={segment.processedWaveform} color="#fb923c" />
                 </div>
-                <div className="w-full md:w-auto flex flex-col sm:flex-row items-center space-y-2 sm:space-y-0 sm:space-x-2">
-                    <audio controls src={segment.blobUrl} ref={audioRef} className="w-full sm:w-52 h-10"></audio>
-                    <div className="w-full sm:w-auto flex items-center space-x-2">
-                         <i className="ph-bold ph-speaker-simple-high text-slate-400"></i>
-                         <input
-                            type="range"
-                            min="0"
-                            max="2"
-                            step="0.05"
-                            value={segment.volume}
-                            onChange={(e) => onVolumeChange(segment.id, parseFloat(e.target.value))}
-                            className="w-24 h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                            title={`Volume: ${Math.round(segment.volume * 100)}%`}
-                         />
-                    </div>
-                    <button
-                        onClick={handleDownload}
-                        disabled={isDownloading}
-                        className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 bg-slate-600 text-slate-100 rounded-md hover:bg-slate-500 transition-colors disabled:opacity-50 disabled:cursor-wait"
-                        title={`Download ${segment.name}`}
-                    >
-                        {isDownloading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph-bold ph-download-simple"></i>}
-                        <span className="hidden sm:inline">{isDownloading ? "Preparing..." : "Download"}</span>
-                    </button>
+            </div>
+
+            {/* Right side: Controls */}
+            <div className="w-full lg:w-72 flex-shrink-0 space-y-4">
+                <audio controls src={segment.blobUrl} ref={audioRef} className="w-full h-10"></audio>
+                
+                <div className="space-y-3 pt-2">
+                    <EffectSlider
+                        label="Volume"
+                        icon="ph-speaker-simple-high"
+                        value={segment.volume * 100}
+                        max={200}
+                        step={1}
+                        unit="%"
+                        onChange={(val) => onSettingsChange(segment.id, { volume: val / 100 })}
+                    />
+                    <EffectSlider
+                        label="Fade In"
+                        icon="ph-chart-line-up"
+                        value={segment.fadeInDuration}
+                        max={Math.min(10, segment.duration / 2)}
+                        step={0.05}
+                        unit="s"
+                        onChange={(val) => onSettingsChange(segment.id, { fadeInDuration: val })}
+                    />
+                    <EffectSlider
+                        label="Fade Out"
+                        icon="ph-chart-line-down"
+                        value={segment.fadeOutDuration}
+                        max={Math.min(10, segment.duration / 2)}
+                        step={0.05}
+                        unit="s"
+                        onChange={(val) => onSettingsChange(segment.id, { fadeOutDuration: val })}
+                    />
                 </div>
+                
+                <button
+                    onClick={handleDownload}
+                    disabled={isDownloading}
+                    className="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-slate-600 text-slate-100 rounded-md hover:bg-slate-500 transition-colors disabled:opacity-50 disabled:cursor-wait"
+                    title={`Download ${segment.name}`}
+                >
+                    {isDownloading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph-bold ph-download-simple"></i>}
+                    <span>{isDownloading ? "Applying effects..." : "Download"}</span>
+                </button>
             </div>
         </div>
     );
 };
 
-const Results: React.FC<{ segments: AudioSegment[], onSegmentVolumeChange: (id: number, volume: number) => void; }> = ({ segments, onSegmentVolumeChange }) => {
+const Results: React.FC<{ segments: AudioSegment[], onSegmentSettingsChange: (id: number, settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>) => void; }> = ({ segments, onSegmentSettingsChange }) => {
   const [isZipping, setIsZipping] = useState(false);
 
   const handleDownloadAll = async () => {
@@ -115,7 +173,11 @@ const Results: React.FC<{ segments: AudioSegment[], onSegmentVolumeChange: (id: 
       const zip = new JSZip();
 
       const downloadPromises = segments.map(segment =>
-        applyVolumeToSegment(segment.blobUrl, segment.volume).then(blob => {
+        applyEffectsToSegment(segment.blobUrl, { 
+            volume: segment.volume, 
+            fadeInDuration: segment.fadeInDuration, 
+            fadeOutDuration: segment.fadeOutDuration 
+        }).then(blob => {
           zip.file(segment.name, blob);
         })
       );
@@ -126,7 +188,7 @@ const Results: React.FC<{ segments: AudioSegment[], onSegmentVolumeChange: (id: 
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'SkellyTune_Clips.zip';
+      a.download = 'Bob_the_Skelly_Clips.zip';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -145,7 +207,7 @@ const Results: React.FC<{ segments: AudioSegment[], onSegmentVolumeChange: (id: 
       <div className="flex flex-col sm:flex-row justify-between items-center mb-6">
         <div className="text-center sm:text-left">
           <h2 className="text-2xl font-bold text-slate-200">Your Processed Clips</h2>
-          <p className="text-slate-400">Fine-tune volume for each clip, then download individually or all at once.</p>
+          <p className="text-slate-400">Fine-tune each clip, then download individually or all at once.</p>
         </div>
         {segments.length > 0 && (
           <button
@@ -156,7 +218,7 @@ const Results: React.FC<{ segments: AudioSegment[], onSegmentVolumeChange: (id: 
             {isZipping ? (
               <>
                 <i className="ph ph-spinner animate-spin"></i>
-                <span>Zipping...</span>
+                <span>Applying Effects & Zipping...</span>
               </>
             ) : (
               <>
@@ -170,7 +232,7 @@ const Results: React.FC<{ segments: AudioSegment[], onSegmentVolumeChange: (id: 
       
       <div className="space-y-4">
         {segments.map(segment => (
-          <SegmentCard key={segment.id} segment={segment} onVolumeChange={onSegmentVolumeChange} />
+          <SegmentCard key={segment.id} segment={segment} onSettingsChange={onSegmentSettingsChange} />
         ))}
       </div>
     </section>

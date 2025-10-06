@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { processAudio, getAudioInfo } from '../services/audioProcessor';
 import type { AudioSegment, WaveformData, ProcessedAudioResult } from '../types';
+import { useYouTube } from '../hooks/useYouTube';
 import Header from '../components/Header';
 import Instructions from '../components/Instructions';
 import FileUpload from '../components/FileUpload';
@@ -9,7 +9,6 @@ import ProcessingOptions from '../components/ProcessingOptions';
 import Waveform from '../components/Waveform';
 import ProcessingIndicator from '../components/ProcessingIndicator';
 import Results from '../components/Results';
-import YouTubeGuide from '../components/YouTubeGuide';
 
 const PrepPage: React.FC = () => {
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -20,6 +19,9 @@ const PrepPage: React.FC = () => {
   const [inputType, setInputType] = useState<'upload' | 'youtube'>('upload');
   const [originalFullWaveform, setOriginalFullWaveform] = useState<WaveformData | null>(null);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+
+  const youtube = useYouTube();
 
   const [processingOptions, setProcessingOptions] = useState({
     normalizationDb: -1.0,
@@ -33,13 +35,15 @@ const PrepPage: React.FC = () => {
     };
   }, [processedSegments]);
 
-  const resetState = () => {
+  const resetState = useCallback(() => {
     setAudioFile(null);
     setProcessedSegments([]);
     setError(null);
     setOriginalFullWaveform(null);
     setAudioDuration(null);
-  };
+    setYoutubeUrl('');
+    youtube.reset();
+  }, [youtube]);
   
   const handleFileChange = useCallback(async (file: File | null) => {
     resetState();
@@ -62,8 +66,22 @@ const PrepPage: React.FC = () => {
     } finally {
       setIsPreviewLoading(false);
     }
-  }, []);
+  }, [resetState]);
 
+  const handleYouTubeFetch = async () => {
+      // Do not reset the youtubeUrl so the user can see what they entered
+      setAudioFile(null);
+      setProcessedSegments([]);
+      setError(null);
+      setOriginalFullWaveform(null);
+      setAudioDuration(null);
+
+      const audioBuffer = await youtube.fetchAudio(youtubeUrl);
+      if (audioBuffer) {
+          const file = new File([audioBuffer], "youtube_audio.mp3", { type: "audio/mpeg" });
+          handleFileChange(file);
+      }
+  };
 
   const handleProcessAudio = useCallback(async () => {
     if (!audioFile) {
@@ -76,7 +94,6 @@ const PrepPage: React.FC = () => {
     setProcessedSegments([]);
 
     try {
-      // We pass the already generated waveform to avoid generating it twice
       const result: ProcessedAudioResult = await processAudio(audioFile, processingOptions, originalFullWaveform);
       setProcessedSegments(result.segments);
     } catch (err) {
@@ -87,10 +104,13 @@ const PrepPage: React.FC = () => {
     }
   }, [audioFile, processingOptions, originalFullWaveform]);
 
-  const handleSegmentVolumeChange = (segmentId: number, volume: number) => {
+  const handleSegmentSettingsChange = (
+    segmentId: number, 
+    settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>
+  ) => {
     setProcessedSegments(prevSegments =>
       prevSegments.map(segment =>
-        segment.id === segmentId ? { ...segment, volume } : segment
+        segment.id === segmentId ? { ...segment, ...settings } : segment
       )
     );
   };
@@ -130,10 +150,37 @@ const PrepPage: React.FC = () => {
           </div>
           
           <div className="p-6">
-            {inputType === 'upload' ? (
-              <FileUpload onFileChange={handleFileChange} />
-            ) : (
-              <YouTubeGuide onFileChange={handleFileChange} />
+            {inputType === 'upload' && <FileUpload onFileChange={handleFileChange} />}
+            
+            {inputType === 'youtube' && (
+                <div className="space-y-4">
+                    <p className="text-center text-slate-400">Paste a YouTube URL below to fetch its audio.</p>
+                    <div className="flex items-center space-x-2">
+                        <input
+                            type="text"
+                            value={youtubeUrl}
+                            onChange={(e) => setYoutubeUrl(e.target.value)}
+                            placeholder="e.g., https://www.youtube.com/watch?v=..."
+                            className="w-full pl-4 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-200 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-colors"
+                            aria-label="YouTube URL"
+                            disabled={youtube.status !== 'idle' && youtube.status !== 'error'}
+                        />
+                        <button 
+                            onClick={handleYouTubeFetch}
+                            disabled={!youtubeUrl || (youtube.status !== 'idle' && youtube.status !== 'error')}
+                            className="px-6 py-2 font-bold text-white bg-gradient-to-r from-orange-500 to-red-600 rounded-lg shadow-lg hover:from-orange-600 hover:to-red-700 transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
+                        >
+                            Fetch Audio
+                        </button>
+                    </div>
+                    {youtube.status !== 'idle' && (
+                        <div className="pt-4 text-center">
+                            {youtube.status === 'fetching-url' && <ProcessingIndicator text="Requesting audio stream from backend..." />}
+                            {youtube.status === 'fetching-audio' && <ProcessingIndicator text="Downloading audio data..." />}
+                            {youtube.status === 'error' && <p className="text-red-400" role="alert">Error: {youtube.error}</p>}
+                        </div>
+                    )}
+                </div>
             )}
             
             {audioFile && (
@@ -157,7 +204,6 @@ const PrepPage: React.FC = () => {
                       <div className="bg-slate-700/50 rounded-md p-2">
                         <Waveform 
                           data={originalFullWaveform} 
-                          width={800} 
                           height={80} 
                           color="#a8a29e"
                           totalDuration={audioDuration}
@@ -195,7 +241,7 @@ const PrepPage: React.FC = () => {
           <div className="animate-fade-in">
             <Results 
               segments={processedSegments} 
-              onSegmentVolumeChange={handleSegmentVolumeChange} 
+              onSegmentSettingsChange={handleSegmentSettingsChange} 
             />
           </div>
         )}

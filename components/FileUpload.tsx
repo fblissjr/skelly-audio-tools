@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 
 interface FileUploadProps {
   onFileChange: (file: File | null) => void;
@@ -7,6 +7,7 @@ interface FileUploadProps {
 
 const FileUpload: React.FC<FileUploadProps> = ({ onFileChange, promptMessage }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -22,9 +23,24 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileChange, promptMessage }) 
     fileInputRef.current?.click();
   };
   
+  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer.types && event.dataTransfer.types.includes('Files')) {
+        setIsDraggingOver(true);
+    }
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingOver(false);
+  };
+  
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    setIsDraggingOver(false);
     if (event.dataTransfer.files && event.dataTransfer.files[0]) {
       onFileChange(event.dataTransfer.files[0]);
     }
@@ -34,6 +50,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileChange, promptMessage }) 
     event.preventDefault();
     event.stopPropagation();
   };
+
+  const dropzoneClassName = `w-full max-w-lg px-6 py-10 border-2 border-dashed rounded-lg transition-all duration-300 flex flex-col items-center justify-center cursor-pointer text-center transform ${
+    isDraggingOver
+      ? 'border-orange-500 text-orange-400 scale-105 bg-slate-800/50 shadow-lg'
+      : 'border-slate-600 text-slate-400 hover:border-orange-500 hover:text-orange-400'
+  }`;
 
   return (
     <div className="flex flex-col items-center space-y-4">
@@ -49,7 +71,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileChange, promptMessage }) 
         onClick={handleButtonClick}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
-        className="w-full max-w-lg px-6 py-10 border-2 border-dashed border-slate-600 rounded-lg text-slate-400 hover:border-orange-500 hover:text-orange-400 transition-colors duration-300 flex flex-col items-center justify-center cursor-pointer text-center"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        className={dropzoneClassName}
         role="button"
         tabIndex={0}
         onKeyPress={(e) => e.key === 'Enter' && handleButtonClick()}
