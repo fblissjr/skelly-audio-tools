@@ -3,14 +3,8 @@ import type { AudioSegment, ProcessedAudioResult, WaveformData } from '../types'
 const WAVEFORM_WIDTH = 400; // width in samples for segment waveforms
 const FULL_WAVEFORM_WIDTH = 800; // width for the full track preview
 
-/**
- * Generates an array of peak values from an AudioBuffer for waveform visualization.
- * @param buffer The AudioBuffer to analyze.
- * @param targetWidth The desired number of data points for the waveform.
- * @returns An array of numbers (0-1) representing audio peaks.
- */
 function generateWaveformData(buffer: AudioBuffer, targetWidth: number): WaveformData {
-    const data = buffer.getChannelData(0); // Use the first channel
+    const data = buffer.getChannelData(0);
     const step = Math.ceil(data.length / targetWidth);
     const amps: number[] = [];
     for (let i = 0; i < targetWidth; i++) {
@@ -27,27 +21,6 @@ function generateWaveformData(buffer: AudioBuffer, targetWidth: number): Wavefor
     return amps;
 }
 
-
-/**
- * Decodes an audio file and returns its waveform data and duration.
- */
-export async function getAudioInfo(file: File): Promise<{ waveform: WaveformData; duration: number }> {
-  const audioContext = new AudioContext();
-  const fileBuffer = await file.arrayBuffer();
-  const decodedBuffer = await audioContext.decodeAudioData(fileBuffer);
-  
-  const waveform = generateWaveformData(decodedBuffer, FULL_WAVEFORM_WIDTH);
-  const duration = decodedBuffer.duration;
-
-  await audioContext.close();
-
-  return { waveform, duration };
-}
-
-
-/**
- * Encodes an AudioBuffer into a WAV file format Blob.
- */
 function bufferToWav(buffer: AudioBuffer): Blob {
   const numOfChan = buffer.numberOfChannels;
   const length = buffer.length * numOfChan * 2 + 44;
@@ -96,60 +69,41 @@ function bufferToWav(buffer: AudioBuffer): Blob {
   return new Blob([view], { type: 'audio/wav' });
 }
 
-
 const compressionPresets: { [key: string]: DynamicsCompressorOptions } = {
     light: { threshold: -18, knee: 30, ratio: 2, attack: 0.01, release: 0.1 },
     medium: { threshold: -24, knee: 30, ratio: 4, attack: 0.003, release: 0.25 },
     heavy: { threshold: -30, knee: 30, ratio: 8, attack: 0.003, release: 0.25 },
 };
 
-/**
- * Processes an audio file by normalizing, compressing, and splitting it into 30-second segments.
- */
-export async function processAudio(
-    file: File, 
-    options: { normalizationDb: number; compressionPreset: string; },
-    originalFullWaveform?: WaveformData | null
-): Promise<ProcessedAudioResult> {
+export async function getAudioInfo(file: File): Promise<AudioBuffer> {
   const audioContext = new AudioContext();
   const fileBuffer = await file.arrayBuffer();
   const decodedBuffer = await audioContext.decodeAudioData(fileBuffer);
+  audioContext.close();
+  return decodedBuffer;
+}
 
-  // Use provided waveform if available, otherwise generate it.
-  const finalOriginalFullWaveform = originalFullWaveform || generateWaveformData(decodedBuffer, FULL_WAVEFORM_WIDTH);
+async function applyProcessingEffects(
+    inputBuffer: AudioBuffer,
+    options: { normalizationDb: number; compressionPreset: string; }
+): Promise<AudioBuffer> {
+    let peak = 0;
+    for (let i = 0; i < inputBuffer.numberOfChannels; i++) {
+        const channelData = inputBuffer.getChannelData(i);
+        channelData.forEach(sample => {
+            const absSample = Math.abs(sample);
+            if (absSample > peak) peak = absSample;
+        });
+    }
 
-  let peak = 0;
-  for (let i = 0; i < decodedBuffer.numberOfChannels; i++) {
-    const channelData = decodedBuffer.getChannelData(i);
-    channelData.forEach(sample => {
-      const absSample = Math.abs(sample);
-      if (absSample > peak) peak = absSample;
-    });
-  }
+    const targetAmplitude = 10 ** (options.normalizationDb / 20);
+    const gainValue = peak > 0 ? targetAmplitude / peak : 1;
 
-  const targetAmplitude = 10 ** (options.normalizationDb / 20);
-  const gainValue = peak > 0 ? targetAmplitude / peak : 1;
-
-  const totalDuration = decodedBuffer.duration;
-  const segmentDuration = 30;
-  const numSegments = Math.ceil(totalDuration / segmentDuration);
-  const segments: AudioSegment[] = [];
-
-  for (let i = 0; i < numSegments; i++) {
-    const startTime = i * segmentDuration;
-    const currentSegmentDuration = Math.min(segmentDuration, totalDuration - startTime);
-
-    if (currentSegmentDuration <= 0) continue;
-    
-    const frameCount = Math.ceil(currentSegmentDuration * decodedBuffer.sampleRate);
-    const offlineContext = new OfflineAudioContext(decodedBuffer.numberOfChannels, frameCount, decodedBuffer.sampleRate);
-
+    const offlineContext = new OfflineAudioContext(inputBuffer.numberOfChannels, inputBuffer.length, inputBuffer.sampleRate);
     const source = offlineContext.createBufferSource();
-    source.buffer = decodedBuffer;
-
+    source.buffer = inputBuffer;
     const gainNode = offlineContext.createGain();
     gainNode.gain.value = gainValue;
-
     let lastNode: AudioNode = gainNode;
 
     if (options.compressionPreset !== 'none') {
@@ -168,109 +122,136 @@ export async function processAudio(
     
     source.connect(gainNode);
     lastNode.connect(offlineContext.destination);
-    
-    source.start(0, startTime, currentSegmentDuration);
+    source.start(0);
+    return await offlineContext.startRendering();
+}
 
-    const renderedBuffer = await offlineContext.startRendering();
-
-    const wavBlob = bufferToWav(renderedBuffer);
+export async function processFullTrack(
+    rawBuffer: AudioBuffer,
+    processingOptions: { normalizationDb: number; compressionPreset: string; }
+): Promise<AudioSegment> {
+    const processedBuffer = await applyProcessingEffects(rawBuffer, processingOptions);
+    const wavBlob = bufferToWav(processedBuffer);
     const blobUrl = URL.createObjectURL(wavBlob);
-    
-    // Generate waveform for the original segment slice
-    const originalSegmentBuffer = audioContext.createBuffer(
-        decodedBuffer.numberOfChannels, 
-        frameCount, 
-        decodedBuffer.sampleRate
-    );
-    for(let chan = 0; chan < decodedBuffer.numberOfChannels; chan++) {
-        const sourceData = decodedBuffer.getChannelData(chan);
-        const segmentData = sourceData.subarray(
-            Math.floor(startTime * decodedBuffer.sampleRate),
-            Math.floor((startTime + currentSegmentDuration) * decodedBuffer.sampleRate)
-        );
-        originalSegmentBuffer.copyToChannel(segmentData, chan);
-    }
 
-    segments.push({
-        id: i,
-        name: `Part_${String(i + 1).padStart(2, '0')}.wav`,
+    return {
+        id: 0,
+        name: `Master_Track.wav`,
         blobUrl: blobUrl,
-        duration: currentSegmentDuration,
-        startTime: startTime,
-        originalWaveform: generateWaveformData(originalSegmentBuffer, WAVEFORM_WIDTH),
-        processedWaveform: generateWaveformData(renderedBuffer, WAVEFORM_WIDTH),
+        duration: processedBuffer.duration,
+        startTime: 0,
+        originalWaveform: generateWaveformData(rawBuffer, FULL_WAVEFORM_WIDTH),
+        processedWaveform: generateWaveformData(processedBuffer, FULL_WAVEFORM_WIDTH),
         volume: 1.0,
         fadeInDuration: 0,
         fadeOutDuration: 0,
-    });
-  }
-
-  return { segments, originalFullWaveform: finalOriginalFullWaveform };
+    };
 }
 
-/**
- * Applies volume, fade-in, and fade-out adjustments to an audio blob.
- * @param originalBlobUrl The URL of the blob to process.
- * @param effects An object containing volume, fadeInDuration, and fadeOutDuration.
- * @returns A new Blob with the effects applied.
- */
+export async function extractSegment(
+    processedMasterBuffer: AudioBuffer,
+    options: { 
+        startTime: number;
+        endTime: number;
+        segmentId: number;
+    }
+): Promise<AudioSegment> {
+    const { startTime, endTime, segmentId } = options;
+    const duration = endTime - startTime;
+
+    if (duration <= 0) {
+        throw new Error("End time must be after start time.");
+    }
+
+    const startSample = Math.floor(startTime * processedMasterBuffer.sampleRate);
+    const endSample = Math.floor(endTime * processedMasterBuffer.sampleRate);
+    const frameCount = endSample - startSample;
+    
+    const audioContext = new AudioContext();
+    const slicedBuffer = audioContext.createBuffer(processedMasterBuffer.numberOfChannels, frameCount, processedMasterBuffer.sampleRate);
+
+    for (let i = 0; i < processedMasterBuffer.numberOfChannels; i++) {
+        slicedBuffer.copyToChannel(processedMasterBuffer.getChannelData(i).subarray(startSample, endSample), i);
+    }
+    audioContext.close();
+
+    const wavBlob = bufferToWav(slicedBuffer);
+    const blobUrl = URL.createObjectURL(wavBlob);
+
+    return {
+        id: segmentId,
+        name: `Segment_${String(segmentId + 1).padStart(2, '0')}.wav`,
+        blobUrl: blobUrl,
+        duration: duration,
+        startTime: startTime,
+        originalWaveform: generateWaveformData(slicedBuffer, WAVEFORM_WIDTH),
+        processedWaveform: generateWaveformData(slicedBuffer, WAVEFORM_WIDTH),
+        volume: 1.0,
+        fadeInDuration: 0,
+        fadeOutDuration: 0,
+    };
+}
+
+export async function autoSplitTrack(
+    processedMasterBuffer: AudioBuffer
+): Promise<AudioSegment[]> {
+    const totalDuration = processedMasterBuffer.duration;
+    const segmentDuration = 30;
+    const numSegments = Math.ceil(totalDuration / segmentDuration);
+    const segments: AudioSegment[] = [];
+
+    for (let i = 0; i < numSegments; i++) {
+        const startTime = i * segmentDuration;
+        const endTime = Math.min(startTime + segmentDuration, totalDuration);
+
+        if (endTime - startTime <= 0) continue;
+
+        const segment = await extractSegment(processedMasterBuffer, {
+            startTime,
+            endTime,
+            segmentId: i,
+        });
+        segments.push(segment);
+    }
+
+    return segments;
+}
+
 export async function applyEffectsToSegment(
     originalBlobUrl: string, 
     effects: { volume: number; fadeInDuration: number; fadeOutDuration: number; }
 ): Promise<Blob> {
     const { volume, fadeInDuration, fadeOutDuration } = effects;
-
     const audioContext = new AudioContext();
     const response = await fetch(originalBlobUrl);
     const arrayBuffer = await response.arrayBuffer();
     const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-    const offlineContext = new OfflineAudioContext(
-        decodedBuffer.numberOfChannels,
-        decodedBuffer.length,
-        decodedBuffer.sampleRate
-    );
-
+    const offlineContext = new OfflineAudioContext(decodedBuffer.numberOfChannels, decodedBuffer.length, decodedBuffer.sampleRate);
     const source = offlineContext.createBufferSource();
     source.buffer = decodedBuffer;
-
     const gainNode = offlineContext.createGain();
-
     source.connect(gainNode);
     gainNode.connect(offlineContext.destination);
-    
     const { duration } = decodedBuffer;
     const { gain } = gainNode;
-
-    // Sanitize fade durations
     let effectiveFadeIn = Math.max(0, Math.min(fadeInDuration, duration));
     let effectiveFadeOut = Math.max(0, Math.min(fadeOutDuration, duration));
-
     if (effectiveFadeIn + effectiveFadeOut > duration) {
-        // Fades overlap, prioritize fade-in and shorten fade-out
         effectiveFadeOut = duration - effectiveFadeIn;
     }
-
     const fadeOutStartTime = duration - effectiveFadeOut;
-
-    // Schedule gain changes
-    gain.setValueAtTime(0, 0); // Start at silence
+    gain.setValueAtTime(0, 0);
     if (effectiveFadeIn > 0) {
         gain.linearRampToValueAtTime(volume, effectiveFadeIn);
     } else {
-        gain.setValueAtTime(volume, 0); // No fade in, jump immediately to target volume
+        gain.setValueAtTime(volume, 0);
     }
-
     if (effectiveFadeOut > 0 && fadeOutStartTime > effectiveFadeIn) {
-        // Ensure volume is stable before fade out begins
         gain.setValueAtTime(volume, fadeOutStartTime);
         gain.linearRampToValueAtTime(0, duration);
     }
-
     source.start(0);
-
     const renderedBuffer = await offlineContext.startRendering();
-    await audioContext.close();
-
+    audioContext.close();
     return bufferToWav(renderedBuffer);
 }

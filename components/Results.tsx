@@ -13,14 +13,14 @@ const formatTime = (seconds: number): string => {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
 };
 
-const WaveformDisplay: React.FC<{ title: string; data: WaveformData; color: string }> = ({ title, data, color }) => (
+const WaveformDisplay: React.FC<{ title: string; data: WaveformData; color: string; duration: number; onSeek?: (time: number) => void; }> = ({ title, data, color, duration, onSeek }) => (
     <div className="flex-1 p-2 bg-slate-700/50 rounded-md">
         <p className="text-xs font-bold text-center text-slate-400 uppercase tracking-wider mb-1">{title}</p>
-        <Waveform data={data} height={50} color={color} />
+        <Waveform data={data} height={50} color={color} totalDuration={duration} onSeek={onSeek} />
     </div>
 );
 
-const EffectSlider: React.FC<{
+export const EffectSlider: React.FC<{
     label: string;
     icon: string;
     value: number;
@@ -62,11 +62,9 @@ const SegmentCard: React.FC<{
     const audioRef = useRef<HTMLAudioElement>(null);
     const [isDownloading, setIsDownloading] = useState(false);
 
-    // This useEffect allows the native audio player's volume to be controlled
-    // by our custom volume slider for a better preview experience.
     useEffect(() => {
         if (audioRef.current) {
-            audioRef.current.volume = segment.volume;
+            audioRef.current.volume = Math.max(0, Math.min(1, segment.volume));
         }
     }, [segment.volume]);
 
@@ -90,6 +88,13 @@ const SegmentCard: React.FC<{
         }
     };
 
+    const handleSeek = (time: number) => {
+        if (audioRef.current) {
+            audioRef.current.currentTime = time;
+            audioRef.current.play();
+        }
+    };
+
 
     return (
         <div className="bg-slate-800 rounded-lg p-4 flex flex-col lg:flex-row items-start justify-between gap-6 border border-slate-700 shadow-md">
@@ -107,9 +112,9 @@ const SegmentCard: React.FC<{
                     </div>
                 </div>
                 <div className="w-full flex items-center space-x-2">
-                    <WaveformDisplay title="Before" data={segment.originalWaveform} color="#a8a29e" />
+                    <WaveformDisplay title="Before" data={segment.originalWaveform} color="#a8a29e" duration={segment.duration} onSeek={handleSeek} />
                     <i className="ph-bold ph-arrow-right text-slate-500 text-xl"></i>
-                    <WaveformDisplay title="After" data={segment.processedWaveform} color="#fb923c" />
+                    <WaveformDisplay title="After" data={segment.processedWaveform} color="#fb923c" duration={segment.duration} onSeek={handleSeek} />
                 </div>
             </div>
 
