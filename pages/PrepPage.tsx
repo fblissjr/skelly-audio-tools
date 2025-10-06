@@ -175,9 +175,8 @@ const PrepPage: React.FC = () => {
                     </div>
                     {youtube.status !== 'idle' && (
                         <div className="pt-4 text-center">
-                            {youtube.status === 'fetching-url' && <ProcessingIndicator text="Requesting audio stream from backend..." />}
-                            {youtube.status === 'fetching-audio' && <ProcessingIndicator text="Downloading audio data..." />}
-                            {youtube.status === 'error' && <p className="text-red-400" role="alert">Error: {youtube.error}</p>}
+                            {youtube.status === 'fetching' && <ProcessingIndicator text="Fetching and streaming audio..." />}
+                    {youtube.status === 'error' && <p className="text-red-400" role="alert">Error: {youtube.error}</p>}
                         </div>
                     )}
                 </div>
