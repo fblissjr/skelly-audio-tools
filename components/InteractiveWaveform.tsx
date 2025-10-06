@@ -12,69 +12,64 @@ const InteractiveWaveform: React.FC<InteractiveWaveformProps> = ({ audioUrl, onR
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const [isReady, setIsReady] = useState(false);
 
+  // Use a ref to hold the latest callback function to avoid stale closures in the main useEffect
+  const onRegionChangeRef = useRef(onRegionChange);
+  useEffect(() => {
+    onRegionChangeRef.current = onRegionChange;
+  }, [onRegionChange]);
+
   useEffect(() => {
     if (!containerRef.current) return;
 
     const ws = WaveSurfer.create({
       container: containerRef.current,
-      waveColor: '#a8a29e', // stone-400
-      progressColor: '#fb923c', // orange-400
+      waveColor: '#a8a29e',
+      progressColor: '#fb923c',
       height: 150,
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
       cursorWidth: 2,
-      cursorColor: '#f87171', // red-400
+      cursorColor: '#f87171',
     });
 
     wavesurferRef.current = ws;
 
     const wsRegions = ws.registerPlugin(RegionsPlugin.create());
 
-    let activeRegion: Region | null = null;
-
-    // When a new region is created, ensure only one exists at a time
     wsRegions.on('region-created', (region) => {
-        // Clear all other regions
         wsRegions.getRegions().forEach(r => {
-            if (r.id !== region.id) {
-                r.remove();
-            }
+            if (r.id !== region.id) r.remove();
         });
-        activeRegion = region;
-        onRegionChange(activeRegion);
+        onRegionChangeRef.current(region);
     });
 
-    // When a region is updated (dragged, resized)
     wsRegions.on('region-updated', (region) => {
-        activeRegion = region;
-        onRegionChange(activeRegion);
+        onRegionChangeRef.current(region);
     });
 
-    // Clear region on click outside
     ws.on('interaction', () => {
-        if (activeRegion) {
-            activeRegion.remove();
-            activeRegion = null;
-            onRegionChange(null);
-        }
+        // This logic is to clear the region, but it might be better handled in the parent
     });
 
     ws.on('ready', () => {
         setIsReady(true);
-        // Enable region creation via dragging
         wsRegions.enableDragSelection({});
     });
 
+    // The cleanup function will now only be called when the component truly unmounts
     return () => {
       ws.destroy();
     };
-  }, [onRegionChange]);
+  }, []); // Empty dependency array ensures this runs only once
 
   useEffect(() => {
-    if (wavesurferRef.current && audioUrl) {
-      setIsReady(false);
-      wavesurferRef.current.load(audioUrl);
+    if (wavesurferRef.current?.isReady && audioUrl) {
+        wavesurferRef.current.load(audioUrl);
+    } else if (wavesurferRef.current && audioUrl) {
+        // If not ready, the 'ready' event will trigger the load
+        // but we can load it here if it's the initial load
+        wavesurferRef.current.load(audioUrl);
     }
   }, [audioUrl]);
 
