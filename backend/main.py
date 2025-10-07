@@ -18,7 +18,13 @@ import zipfile
 import soundfile as sf
 from .separator import VocalSeparator
 
-app = FastAPI()
+app = FastAPI(
+    title="BOB the Skelly - Backend API",
+    version="1.0",
+    description="Provides endpoints for fetching YouTube audio and performing vocal separation."
+)
+
+# Configure CORS
 
 # ... (CORS Middleware remains the same) ...
 
