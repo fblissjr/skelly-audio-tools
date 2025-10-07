@@ -5,6 +5,10 @@ import PrepPage from './pages/PrepPage';
 import ControllerPage from './pages/ControllerPage';
 import Footer from './components/Footer';
 
+import SequencerPage from './pages/SequencerPage';
+
+type Page = 'prep' | 'controller' | 'sequencer';
+
 const App: React.FC = () => {
   const [page, setPage] = useState<'prep' | 'controller'>('prep');
 
@@ -14,6 +18,7 @@ const App: React.FC = () => {
         <Layout activePage={page} setPage={setPage}>
           {page === 'prep' && <PrepPage />}
           {page === 'controller' && <ControllerPage />}
+          {page === 'sequencer' && <SequencerPage />}
         </Layout>
       </div>
       <Footer />

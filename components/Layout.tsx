@@ -47,6 +47,12 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, setPage }) => {
               isActive={activePage === 'controller'}
               onClick={() => setPage('controller')}
             />
+            <NavItem
+              icon="ph-timeline"
+              label="Sequencer"
+              isActive={activePage === 'sequencer'}
+              onClick={() => setPage('sequencer')}
+            />
           </nav>
         </div>
       </aside>
