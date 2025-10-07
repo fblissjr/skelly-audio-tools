@@ -59,13 +59,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileChange, promptMessage }) 
 
   return (
     <div className="flex flex-col items-center space-y-4">
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleFileSelect}
-        accept="audio/*"
-        className="hidden"
-      />
+        <input {...getInputProps()} accept="audio/mpeg, audio/wav, audio/ogg, video/mp4, video/webm, video/quicktime" />
       
       <div
         onClick={handleButtonClick}

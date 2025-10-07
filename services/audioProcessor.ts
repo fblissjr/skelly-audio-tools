@@ -85,11 +85,18 @@ export async function getAudioInfo(file: File): Promise<AudioBuffer> {
 
 async function applyProcessingEffects(
     inputBuffer: AudioBuffer,
-    options: { normalizationDb: number; compressionPreset: string; }
+    options: { normalizationDb: number; compressionPreset: string; noiseGateThreshold?: number; }
 ): Promise<AudioBuffer> {
+    let buffer = inputBuffer;
+
+    // Apply noise gate first, if specified
+    if (options.noiseGateThreshold && options.noiseGateThreshold > -100) {
+        buffer = applyNoiseGate(buffer, options.noiseGateThreshold);
+    }
+
     let peak = 0;
-    for (let i = 0; i < inputBuffer.numberOfChannels; i++) {
-        const channelData = inputBuffer.getChannelData(i);
+    for (let i = 0; i < buffer.numberOfChannels; i++) {
+        const channelData = buffer.getChannelData(i);
         channelData.forEach(sample => {
             const absSample = Math.abs(sample);
             if (absSample > peak) peak = absSample;
@@ -99,9 +106,9 @@ async function applyProcessingEffects(
     const targetAmplitude = 10 ** (options.normalizationDb / 20);
     const gainValue = peak > 0 ? targetAmplitude / peak : 1;
 
-    const offlineContext = new OfflineAudioContext(inputBuffer.numberOfChannels, inputBuffer.length, inputBuffer.sampleRate);
+    const offlineContext = new OfflineAudioContext(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
     const source = offlineContext.createBufferSource();
-    source.buffer = inputBuffer;
+    source.buffer = buffer;
     const gainNode = offlineContext.createGain();
     gainNode.gain.value = gainValue;
     let lastNode: AudioNode = gainNode;
@@ -124,6 +131,33 @@ async function applyProcessingEffects(
     lastNode.connect(offlineContext.destination);
     source.start(0);
     return await offlineContext.startRendering();
+}
+
+function applyNoiseGate(buffer: AudioBuffer, thresholdDb: number): AudioBuffer {
+    const threshold = 10 ** (thresholdDb / 20);
+    const chunk_size = 512; // Process in small chunks
+
+    for (let i = 0; i < buffer.numberOfChannels; i++) {
+        const channelData = buffer.getChannelData(i);
+        for (let j = 0; j < channelData.length; j += chunk_size) {
+            const chunkEnd = Math.min(j + chunk_size, channelData.length);
+            const chunk = channelData.subarray(j, chunkEnd);
+
+            let sum_squares = 0.0;
+            for (let k = 0; k < chunk.length; k++) {
+                sum_squares += chunk[k] * chunk[k];
+            }
+            const rms = Math.sqrt(sum_squares / chunk.length);
+
+            if (rms < threshold) {
+                // Silence this chunk
+                for (let k = 0; k < chunk.length; k++) {
+                    chunk[k] = 0;
+                }
+            }
+        }
+    }
+    return buffer;
 }
 
 export async function processFullTrack(

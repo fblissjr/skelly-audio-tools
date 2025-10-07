@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { getAudioInfo, processFullTrack, extractSegment, autoSplitTrack } from '../services/audioProcessor';
+import { extractAudio } from '../services/ffmpegService';
 import type { AudioSegment } from '../types';
 import { useYouTube } from '../hooks/useYouTube';
 import Header from '../components/Header';
@@ -8,6 +9,9 @@ import FileUpload from '../components/FileUpload';
 import ProcessingOptions from '../components/ProcessingOptions';
 import ProcessingIndicator from '../components/ProcessingIndicator';
 import Results from '../components/Results';
+import { getAudio } from '../services/database';
+import YouTubeHistory from '../components/YouTubeHistory';
+import VocalSeparation from '../components/VocalSeparation';
 import MasterTrackEditor from '../components/MasterTrackEditor';
 import type { Region } from 'wavesurfer.js/dist/plugins/regions.esm.js';
 
@@ -15,6 +19,7 @@ const PrepPage: React.FC = () => {
   // Input state
   const [inputType, setInputType] = useState<'upload' | 'youtube'>('upload');
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [processingMode, setProcessingMode] = useState<'segmentation' | 'separation'>('segmentation');
 
   // Core audio data state
   const [rawAudioBuffer, setRawAudioBuffer] = useState<AudioBuffer | null>(null);
@@ -31,7 +36,12 @@ const PrepPage: React.FC = () => {
   const [processingOptions, setProcessingOptions] = useState({
     normalizationDb: -1.0,
     compressionPreset: 'medium',
+    noiseGateThreshold: -100, // Off by default
+    jawSensitivity: 0.25, // Default activation threshold
   });
+
+  const [isExtracting, setIsExtracting] = useState<boolean>(false);
+  const [extractionProgress, setExtractionProgress] = useState(0);
 
   const resetState = useCallback(() => {
     setRawAudioBuffer(null);
@@ -39,25 +49,44 @@ const PrepPage: React.FC = () => {
     setProcessedSegments([]);
     setError(null);
     youtube.reset();
+    setIsExtracting(false);
+    setExtractionProgress(0);
   }, [youtube]);
 
-  const handleFileLoad = useCallback(async (file: File) => {
-    resetState();
-    setIsProcessing(true);
-    setError(null);
-
+  const processAndLoadAudio = useCallback(async (audioFile: File) => {
     try {
-      const buffer = await getAudioInfo(file);
+      const buffer = await getAudioInfo(audioFile);
       setRawAudioBuffer(buffer);
       const master = await processFullTrack(buffer, processingOptions);
       setMasterTrack(master);
     } catch (err: any) {
       setError(`Failed to load audio: ${err.message}`);
       resetState();
-    } finally {
-      setIsProcessing(false);
     }
   }, [resetState, processingOptions]);
+
+  const handleFileLoad = useCallback(async (file: File) => {
+    resetState();
+    setIsProcessing(true);
+    setError(null);
+
+    if (file.type.startsWith('video/')) {
+        setIsExtracting(true);
+        try {
+            const audioFile = await extractAudio(file, setExtractionProgress);
+            await processAndLoadAudio(audioFile);
+        } catch (err: any) {
+            setError(`Failed to extract audio from video: ${err.message}`);
+            resetState();
+        } finally {
+            setIsExtracting(false);
+        }
+    } else {
+        await processAndLoadAudio(file);
+    }
+
+    setIsProcessing(false);
+  }, [resetState, processAndLoadAudio]);
 
   const handleYouTubeFetch = async () => {
       const audioBuffer = await youtube.fetchAudio(youtubeUrl);
@@ -65,6 +94,18 @@ const PrepPage: React.FC = () => {
           const file = new File([audioBuffer], "youtube_audio.mp3", { type: "audio/mpeg" });
           handleFileLoad(file);
       }
+  };
+
+  const handleLoadFromHistory = async (id: string) => {
+    try {
+        const record = await getAudio(id);
+        if (record) {
+            const file = new File([record.data], `${record.title}.mp3`, { type: "audio/mpeg" });
+            handleFileLoad(file);
+        }
+    } catch (err: any) {
+        setError(`Failed to load from history: ${err.message}`);
+    }
   };
 
   const handleAddSegment = async () => {
@@ -115,72 +156,61 @@ const PrepPage: React.FC = () => {
         <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
           <div className="flex border-b border-slate-700">
             <button
-              onClick={() => { setInputType('upload'); resetState(); }}
+              onClick={() => setProcessingMode('segmentation')}
               className={`flex-1 p-4 font-semibold text-center transition-colors duration-200 rounded-tl-xl ${
-                inputType === 'upload'
+                processingMode === 'segmentation'
                   ? 'bg-slate-700/50 text-orange-400 border-b-2 border-orange-400'
                   : 'text-slate-400 hover:bg-slate-700/30'
               }`}>
-              <i className="ph-bold ph-upload-simple mr-2"></i>
-              Upload Audio File
+              Segmentation Tools
             </button>
             <button
-              onClick={() => { setInputType('youtube'); resetState(); }}
+              onClick={() => setProcessingMode('separation')}
               className={`flex-1 p-4 font-semibold text-center transition-colors duration-200 rounded-tr-xl ${
-                inputType === 'youtube'
+                processingMode === 'separation'
                   ? 'bg-slate-700/50 text-orange-400 border-b-2 border-orange-400'
                   : 'text-slate-400 hover:bg-slate-700/30'
               }`}>
-              <i className="ph-bold ph-youtube-logo mr-2"></i>
-              From YouTube URL
+              AI Vocal Separation
             </button>
           </div>
 
           <div className="p-6">
-            {!masterTrack && !isProcessing && (
+            {processingMode === 'separation' && <VocalSeparation />}
+            {processingMode === 'segmentation' && (
               <>
-                {inputType === 'upload' && <FileUpload onFileChange={handleFileLoad} />}
-                {inputType === 'youtube' && (
-                    <div className="space-y-4">
-                        <p className="text-center text-slate-400">Paste a YouTube URL below to fetch its audio.</p>
-                        <div className="flex items-center space-x-2">
-                            <input
-                                type="text"
-                                value={youtubeUrl}
-                                onChange={(e) => setYoutubeUrl(e.target.value)}
-                                placeholder="e.g., https://www.youtube.com/watch?v=..."
-                                className="w-full pl-4 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-200 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-colors"
-                                disabled={youtube.status === 'fetching'}
-                            />
-                            <button 
-                                onClick={handleYouTubeFetch}
-                                disabled={!youtubeUrl || youtube.status === 'fetching'}
-                                className="px-6 py-2 font-bold text-white bg-gradient-to-r from-orange-500 to-red-600 rounded-lg shadow-lg hover:from-orange-600 hover:to-red-700 transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100">
-                                Fetch Audio
-                            </button>
-                        </div>
-                    </div>
+                {!masterTrack && !isProcessing && (
+                  <>
+                    {inputType === 'upload' && <FileUpload onFileChange={handleFileLoad} />}
+                    {inputType === 'youtube' && (/* YouTube UI */)}
+                  </>
+                )}
+
+                {(isProcessing || youtube.status === 'fetching') && (
+                <ProcessingIndicator 
+                    text={isExtracting 
+                        ? `Extracting audio from video... (${extractionProgress}%)` 
+                        : (youtube.status === 'fetching' ? 'Fetching audio...' : 'Processing audio...')}
+                />
+            )}
+                {error && <p>{error}</p>}
+                {youtube.error && <p>{youtube.error}</p>}
+
+                {masterTrack && (
+                  <div className="space-y-6">
+                    <ProcessingOptions options={processingOptions} setOptions={setProcessingOptions} />
+                                    <MasterTrackEditor 
+                                        masterTrack={masterTrack}
+                                        isProcessing={isProcessing}
+                                        selectedRegion={selectedRegion}
+                                        activationThreshold={processingOptions.jawSensitivity}
+                                        onRegionChange={setSelectedRegion}
+                                        onAddSegment={handleAddSegment}
+                                        onAutoSplit={handleAutoSplit}
+                                        onSettingsChange={handleMasterTrackSettingsChange}
+                                    />                  </div>
                 )}
               </>
-            )}
-
-            {(isProcessing || youtube.status === 'fetching') && <ProcessingIndicator text={youtube.status === 'fetching' ? 'Fetching audio...' : 'Processing audio...'} />}
-            {error && <p className="text-red-400 mt-4 text-center" role="alert">{error}</p>}
-            {youtube.error && <p className="text-red-400 mt-4 text-center" role="alert">{youtube.error}</p>}
-
-            {masterTrack && (
-              <div className="space-y-6">
-                <ProcessingOptions options={processingOptions} setOptions={setProcessingOptions} />
-                <MasterTrackEditor 
-                    masterTrack={masterTrack}
-                    isProcessing={isProcessing}
-                    selectedRegion={selectedRegion}
-                    onRegionChange={setSelectedRegion}
-                    onAddSegment={handleAddSegment}
-                    onAutoSplit={handleAutoSplit}
-                    onSettingsChange={handleMasterTrackSettingsChange}
-                />
-              </div>
             )}
           </div>
         </div>

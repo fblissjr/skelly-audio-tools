@@ -9,6 +9,7 @@ interface MasterTrackEditorProps {
   masterTrack: AudioSegment;
   isProcessing: boolean;
   selectedRegion: Region | null;
+  activationThreshold: number;
   onRegionChange: (region: Region | null) => void;
   onAddSegment: () => void;
   onAutoSplit: () => void;
@@ -29,6 +30,7 @@ const MasterTrackEditor: React.FC<MasterTrackEditorProps> = ({
   onAddSegment,
   onAutoSplit,
   onSettingsChange,
+  activationThreshold,
 }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -70,7 +72,11 @@ const MasterTrackEditor: React.FC<MasterTrackEditorProps> = ({
       <div>
         <h3 className="text-lg font-semibold text-slate-300 mb-2">Master Track Editor</h3>
         <div className="p-4 bg-slate-800 border border-slate-700 rounded-lg space-y-4">
-          <InteractiveWaveform audioUrl={masterTrack.blobUrl} onRegionChange={onRegionChange} />
+          <InteractiveWaveform 
+            audioUrl={masterTrack.blobUrl} 
+            onRegionChange={onRegionChange} 
+            activationThreshold={activationThreshold} 
+          />
           <audio controls src={masterTrack.blobUrl} ref={audioRef} className="w-full h-10"></audio>
         </div>
       </div>

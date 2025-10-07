@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { addAudio } from '../services/database';
 
 // Defines the possible states of the YouTube fetching process
 export type YouTubeFetchStatus = 'idle' | 'fetching' | 'success' | 'error';
@@ -8,7 +9,7 @@ export interface YouTubeFetchState {
   error: string | null;
 }
 
-const BACKEND_URL = 'http://localhost:8000/get-audio-url';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000/get-audio-url';
 
 export const useYouTube = () => {
   const [state, setState] = useState<YouTubeFetchState>({
@@ -21,6 +22,9 @@ export const useYouTube = () => {
       setState({ status: 'error', error: 'YouTube URL cannot be empty.' });
       return null;
     }
+
+    const videoIdMatch = youTubeUrl.match(/(?:v=)([^&]+)/);
+    const videoId = videoIdMatch ? videoIdMatch[1] : new Date().getTime().toString();
 
     setState({ status: 'fetching', error: null });
     try {
@@ -35,8 +39,14 @@ export const useYouTube = () => {
         throw new Error(errorData.detail || `Server error: ${response.statusText}`);
       }
 
-      // The response IS the audio data now
+      const titleHeader = response.headers.get('X-Video-Title');
+      const title = titleHeader ? decodeURIComponent(titleHeader) : 'Unknown Title';
+      
       const arrayBuffer = await response.arrayBuffer();
+      
+      // Save to IndexedDB
+      await addAudio({ id: videoId, title, data: arrayBuffer.slice(0) });
+
       setState({ status: 'success', error: null });
       return arrayBuffer;
 

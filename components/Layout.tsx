@@ -32,7 +32,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, setPage }) => {
       <aside className="w-56 flex-shrink-0 pr-8">
         <div className="sticky top-8">
           <h1 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-red-500 mb-6">
-            Bob the Skelly
+            BOB the Skelly
           </h1>
           <nav className="space-y-2">
             <NavItem

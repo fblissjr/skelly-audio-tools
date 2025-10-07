@@ -1,4 +1,4 @@
-# Bob the Skelly
+# BOB the Skelly
 
 This project provides a web-based interface for preparing audio files and controlling a "Skelly" Bluetooth device.
 

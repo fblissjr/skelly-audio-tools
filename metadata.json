@@ -1,5 +1,5 @@
 {
-  "name": "Bob the Skelly",
-  "description": "Bob the Skelly",
+  "name": "BOB the Skelly",
+  "description": "BOB the Skelly Audio Prep",
   "requestFramePermissions": ["bluetooth"]
 }
