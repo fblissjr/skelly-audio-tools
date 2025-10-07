@@ -182,7 +182,28 @@ const PrepPage: React.FC = () => {
                 {!masterTrack && !isProcessing && (
                   <>
                     {inputType === 'upload' && <FileUpload onFileChange={handleFileLoad} />}
-                    {inputType === 'youtube' && (/* YouTube UI */)}
+                    {inputType === 'youtube' && (
+                    <div className="space-y-4">
+                        <p className="text-center text-slate-400">Paste a YouTube URL below to fetch its audio.</p>
+                        <div className="flex items-center space-x-2">
+                            <input
+                                type="text"
+                                value={youtubeUrl}
+                                onChange={(e) => setYoutubeUrl(e.target.value)}
+                                placeholder="e.g., https://www.youtube.com/watch?v=..."
+                                className="w-full pl-4 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-200 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-colors"
+                                disabled={youtube.status === 'fetching'}
+                            />
+                            <button 
+                                onClick={handleYouTubeFetch}
+                                disabled={!youtubeUrl || youtube.status === 'fetching'}
+                                className="px-6 py-2 font-bold text-white bg-gradient-to-r from-orange-500 to-red-600 rounded-lg shadow-lg hover:from-orange-600 hover:to-red-700 transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100">
+                                Fetch Audio
+                            </button>
+                        </div>
+                        <YouTubeHistory onLoad={handleLoadFromHistory} />
+                    </div>
+                )}
                   </>
                 )}
 

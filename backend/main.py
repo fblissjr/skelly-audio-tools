@@ -16,7 +16,7 @@ import os
 import tempfile
 import zipfile
 import soundfile as sf
-from .separator import VocalSeparator
+from separator import VocalSeparator
 
 app = FastAPI(
     title="BOB the Skelly - Backend API",
