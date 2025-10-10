@@ -2,8 +2,8 @@ import React from 'react';
 
 interface LayoutProps {
   children: React.ReactNode;
-  activePage: 'prep' | 'controller';
-  setPage: (page: 'prep' | 'controller') => void;
+  activePage: 'prep' | 'controller' | 'sequencer' | 'conversation';
+  setPage: (page: 'prep' | 'controller' | 'sequencer' | 'conversation') => void;
 }
 
 const NavItem: React.FC<{
@@ -52,6 +52,12 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, setPage }) => {
               label="Sequencer"
               isActive={activePage === 'sequencer'}
               onClick={() => setPage('sequencer')}
+            />
+            <NavItem
+              icon="ph-microphone"
+              label="Conversation"
+              isActive={activePage === 'conversation'}
+              onClick={() => setPage('conversation')}
             />
           </nav>
         </div>

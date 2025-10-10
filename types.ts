@@ -12,6 +12,10 @@ export interface AudioSegment {
   volume: number; // Volume multiplier, 1.0 is default
   fadeInDuration: number; // in seconds
   fadeOutDuration: number; // in seconds
+  // Vocal separation state
+  isSeparated?: boolean;
+  instrumentalBlobUrl?: string;
+  originalMixBlobUrl?: string; // Store original before separation
 }
 
 export interface ProcessedAudioResult {

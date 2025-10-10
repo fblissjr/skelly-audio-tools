@@ -53,14 +53,18 @@ export const EffectSlider: React.FC<{
 );
 
 
-const SegmentCard: React.FC<{ 
-    segment: AudioSegment, 
-    onSettingsChange: (id: number, settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>) => void; 
-}> = ({ segment, onSettingsChange }) => {
+const SegmentCard: React.FC<{
+    segment: AudioSegment,
+    onSettingsChange: (id: number, settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>) => void;
+    onSeparateVocals?: (segmentId: number, segmentFile: File) => Promise<void>;
+    globalInstrumentalFile?: File | null;
+}> = ({ segment, onSettingsChange, onSeparateVocals, globalInstrumentalFile }) => {
     const startTimeFormatted = formatTime(segment.startTime);
     const endTimeFormatted = formatTime(segment.startTime + segment.duration);
     const audioRef = useRef<HTMLAudioElement>(null);
     const [isDownloading, setIsDownloading] = useState(false);
+    const [isSeparating, setIsSeparating] = useState(false);
+    const [useRecombined, setUseRecombined] = useState(false);
 
     useEffect(() => {
         if (audioRef.current) {
@@ -68,15 +72,161 @@ const SegmentCard: React.FC<{
         }
     }, [segment.volume]);
 
+    const handleSeparateVocals = async () => {
+        if (!onSeparateVocals) return;
+        setIsSeparating(true);
+        try {
+            // Convert blob URL to File
+            const response = await fetch(segment.blobUrl);
+            const blob = await response.blob();
+            const file = new File([blob], segment.name, { type: 'audio/wav' });
+            await onSeparateVocals(segment.id, file);
+        } catch (error) {
+            console.error(`Failed to separate vocals for ${segment.name}:`, error);
+        } finally {
+            setIsSeparating(false);
+        }
+    };
+
+    const recombineAudio = async (): Promise<Blob> => {
+        // Mix vocals (current segment) with instrumental
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+
+        // Load vocals
+        const vocalsResponse = await fetch(segment.blobUrl);
+        const vocalsBlob = await vocalsResponse.arrayBuffer();
+        const vocalsBuffer = await audioContext.decodeAudioData(vocalsBlob);
+
+        // Load instrumental
+        let instrumentalBuffer: AudioBuffer;
+        if (segment.instrumentalBlobUrl) {
+            // Use segment-specific instrumental
+            const instResponse = await fetch(segment.instrumentalBlobUrl);
+            const instBlob = await instResponse.arrayBuffer();
+            instrumentalBuffer = await audioContext.decodeAudioData(instBlob);
+        } else if (globalInstrumentalFile) {
+            // Use global instrumental, need to extract the right segment
+            const instArrayBuffer = await globalInstrumentalFile.arrayBuffer();
+            const fullInstBuffer = await audioContext.decodeAudioData(instArrayBuffer);
+
+            // Extract segment from global instrumental
+            const sampleRate = fullInstBuffer.sampleRate;
+            const startSample = Math.floor(segment.startTime * sampleRate);
+            const length = Math.floor(segment.duration * sampleRate);
+
+            instrumentalBuffer = audioContext.createBuffer(
+                fullInstBuffer.numberOfChannels,
+                length,
+                sampleRate
+            );
+
+            for (let channel = 0; channel < fullInstBuffer.numberOfChannels; channel++) {
+                const sourceData = fullInstBuffer.getChannelData(channel);
+                const destData = instrumentalBuffer.getChannelData(channel);
+                for (let i = 0; i < length && (startSample + i) < sourceData.length; i++) {
+                    destData[i] = sourceData[startSample + i];
+                }
+            }
+        } else {
+            throw new Error('No instrumental track available for recombination');
+        }
+
+        // Mix the two buffers
+        const maxLength = Math.max(vocalsBuffer.length, instrumentalBuffer.length);
+        const numberOfChannels = Math.max(vocalsBuffer.numberOfChannels, instrumentalBuffer.numberOfChannels);
+        const sampleRate = vocalsBuffer.sampleRate;
+
+        const mixedBuffer = audioContext.createBuffer(numberOfChannels, maxLength, sampleRate);
+
+        for (let channel = 0; channel < numberOfChannels; channel++) {
+            const mixedData = mixedBuffer.getChannelData(channel);
+            const vocalsData = channel < vocalsBuffer.numberOfChannels ? vocalsBuffer.getChannelData(channel) : null;
+            const instData = channel < instrumentalBuffer.numberOfChannels ? instrumentalBuffer.getChannelData(channel) : null;
+
+            for (let i = 0; i < maxLength; i++) {
+                let sample = 0;
+                if (vocalsData && i < vocalsBuffer.length) sample += vocalsData[i];
+                if (instData && i < instrumentalBuffer.length) sample += instData[i];
+                mixedData[i] = sample;
+            }
+        }
+
+        // Convert to WAV blob
+        const wavBlob = await bufferToWave(mixedBuffer, sampleRate);
+        return wavBlob;
+    };
+
+    const bufferToWave = (buffer: AudioBuffer, sampleRate: number): Promise<Blob> => {
+        const length = buffer.length * buffer.numberOfChannels * 2 + 44;
+        const arrayBuffer = new ArrayBuffer(length);
+        const view = new DataView(arrayBuffer);
+        const channels = [];
+        let offset = 0;
+        let pos = 0;
+
+        // Write WAV header
+        const setUint16 = (data: number) => {
+            view.setUint16(pos, data, true);
+            pos += 2;
+        };
+        const setUint32 = (data: number) => {
+            view.setUint32(pos, data, true);
+            pos += 4;
+        };
+
+        setUint32(0x46464952); // "RIFF"
+        setUint32(length - 8); // file length - 8
+        setUint32(0x45564157); // "WAVE"
+        setUint32(0x20746d66); // "fmt " chunk
+        setUint32(16); // length = 16
+        setUint16(1); // PCM (uncompressed)
+        setUint16(buffer.numberOfChannels);
+        setUint32(sampleRate);
+        setUint32(sampleRate * 2 * buffer.numberOfChannels); // avg. bytes/sec
+        setUint16(buffer.numberOfChannels * 2); // block-align
+        setUint16(16); // 16-bit
+        setUint32(0x61746164); // "data" - chunk
+        setUint32(length - pos - 4); // chunk length
+
+        // Write interleaved data
+        for (let i = 0; i < buffer.numberOfChannels; i++) {
+            channels.push(buffer.getChannelData(i));
+        }
+
+        while (pos < length) {
+            for (let i = 0; i < buffer.numberOfChannels; i++) {
+                let sample = Math.max(-1, Math.min(1, channels[i][offset]));
+                sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                view.setInt16(pos, sample, true);
+                pos += 2;
+            }
+            offset++;
+        }
+
+        return Promise.resolve(new Blob([arrayBuffer], { type: 'audio/wav' }));
+    };
+
     const handleDownload = async () => {
         setIsDownloading(true);
         try {
-            const { volume, fadeInDuration, fadeOutDuration } = segment;
-            const adjustedBlob = await applyEffectsToSegment(segment.blobUrl, { volume, fadeInDuration, fadeOutDuration });
-            const url = URL.createObjectURL(adjustedBlob);
+            let blobToDownload: Blob;
+
+            if (useRecombined && (segment.instrumentalBlobUrl || globalInstrumentalFile)) {
+                // Recombine vocals with instrumental first
+                blobToDownload = await recombineAudio();
+            } else {
+                // Just download vocals with effects
+                const { volume, fadeInDuration, fadeOutDuration } = segment;
+                blobToDownload = await applyEffectsToSegment(segment.blobUrl, { volume, fadeInDuration, fadeOutDuration });
+            }
+
+            const url = URL.createObjectURL(blobToDownload);
             const a = document.createElement('a');
             a.href = url;
-            a.download = segment.name;
+            const downloadName = useRecombined
+                ? segment.name.replace('.wav', '_recombined.wav')
+                : segment.name;
+            a.download = downloadName;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -151,7 +301,38 @@ const SegmentCard: React.FC<{
                         onChange={(val) => onSettingsChange(segment.id, { fadeOutDuration: val })}
                     />
                 </div>
-                
+
+                {/* Vocal Separation Controls */}
+                {!segment.isSeparated && onSeparateVocals && (
+                    <button
+                        onClick={handleSeparateVocals}
+                        disabled={isSeparating}
+                        className="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-500 transition-colors disabled:opacity-50 disabled:cursor-wait"
+                    >
+                        {isSeparating ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph-bold ph-scissors"></i>}
+                        <span>{isSeparating ? "Separating..." : "Separate Vocals"}</span>
+                    </button>
+                )}
+
+                {/* Recombination Toggle */}
+                {segment.isSeparated && (segment.instrumentalBlobUrl || globalInstrumentalFile) && (
+                    <div className="p-3 bg-slate-700/50 rounded-md">
+                        <label className="flex items-center justify-between cursor-pointer">
+                            <span className="text-sm text-slate-300 flex items-center">
+                                <i className="ph-bold ph-disc mr-2 text-purple-400"></i>
+                                Recombine with Instrumental
+                            </span>
+                            <input
+                                type="checkbox"
+                                checked={useRecombined}
+                                onChange={(e) => setUseRecombined(e.target.checked)}
+                                className="w-4 h-4 text-purple-600 bg-slate-700 border-slate-600 rounded focus:ring-purple-500 focus:ring-2"
+                            />
+                        </label>
+                        <p className="text-xs text-slate-500 mt-1">Download with instrumental track mixed back in</p>
+                    </div>
+                )}
+
                 <button
                     onClick={handleDownload}
                     disabled={isDownloading}
@@ -166,7 +347,12 @@ const SegmentCard: React.FC<{
     );
 };
 
-const Results: React.FC<{ segments: AudioSegment[], onSegmentSettingsChange: (id: number, settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>) => void; }> = ({ segments, onSegmentSettingsChange }) => {
+const Results: React.FC<{
+    segments: AudioSegment[],
+    onSegmentSettingsChange: (id: number, settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>) => void;
+    onSeparateVocals?: (segmentId: number, segmentFile: File) => Promise<void>;
+    globalInstrumentalFile?: File | null;
+}> = ({ segments, onSegmentSettingsChange, onSeparateVocals, globalInstrumentalFile }) => {
   const [isZipping, setIsZipping] = useState(false);
 
   const handleDownloadAll = async () => {
@@ -237,7 +423,13 @@ const Results: React.FC<{ segments: AudioSegment[], onSegmentSettingsChange: (id
       
       <div className="space-y-4">
         {segments.map(segment => (
-          <SegmentCard key={segment.id} segment={segment} onSettingsChange={onSegmentSettingsChange} />
+          <SegmentCard
+            key={segment.id}
+            segment={segment}
+            onSettingsChange={onSegmentSettingsChange}
+            onSeparateVocals={onSeparateVocals}
+            globalInstrumentalFile={globalInstrumentalFile}
+          />
         ))}
       </div>
     </section>

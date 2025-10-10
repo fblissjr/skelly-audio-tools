@@ -1,7 +1,6 @@
-# Configuration for the Mel-Band RoFormer model (dim=320, depth=12).
 model:
-  dim: 320
-  depth: 12
+  dim: 384
+  depth: 6
   stereo: true
   num_stems: 1
   time_transformer_depth: 1
@@ -13,14 +12,14 @@ model:
   ff_dropout: 0
   flash_attn: True
   dim_freqs_in: 1025
-  sample_rate: 44100
+  sample_rate: 44100 # needed for mel filter bank from librosa
   stft_n_fft: 2048
   stft_hop_length: 441
   stft_win_length: 2048
   stft_normalized: False
   mask_estimator_depth: 2
   multi_stft_resolution_loss_weight: 1.0
-  multi_stft_resolutions_window_sizes: !!python/tuple
+  multi_stft_resolutions_window_sizes:
     - 4096
     - 2048
     - 1024
@@ -29,10 +28,12 @@ model:
   multi_stft_hop_size: 147
   multi_stft_normalized: False
 
-inference:
-  # This model's config suggests a larger chunk size.
-  # dim_t * hop_length = 1101 * 441 = 485541 (approx. 485100 from audio section)
-  chunk_size: 485100
+training:
+  instruments:
+    - vocals
+    - other
+  target_instrument: vocals
 
-  # Overlap value from the custom model's inference section.
-  num_overlap: 4
+inference:
+  num_overlap: 2
+  chunk_size: 352800

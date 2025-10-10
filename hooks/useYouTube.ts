@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { addAudio } from '../services/database';
+import { addAudio, getAudio } from '../services/database';
 
 // Defines the possible states of the YouTube fetching process
 export type YouTubeFetchStatus = 'idle' | 'fetching' | 'success' | 'error';
@@ -28,6 +28,16 @@ export const useYouTube = () => {
 
     setState({ status: 'fetching', error: null });
     try {
+      // Check cache first
+      const cachedAudio = await getAudio(videoId);
+      if (cachedAudio) {
+        console.log(`Using cached audio for video ID: ${videoId}`);
+        setState({ status: 'success', error: null });
+        return cachedAudio.data;
+      }
+
+      // Not in cache, fetch from backend
+      console.log(`Fetching audio from backend for video ID: ${videoId}`);
       const response = await fetch(BACKEND_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -41,10 +51,10 @@ export const useYouTube = () => {
 
       const titleHeader = response.headers.get('X-Video-Title');
       const title = titleHeader ? decodeURIComponent(titleHeader) : 'Unknown Title';
-      
+
       const arrayBuffer = await response.arrayBuffer();
-      
-      // Save to IndexedDB
+
+      // Save to IndexedDB for future use
       await addAudio({ id: videoId, title, data: arrayBuffer.slice(0) });
 
       setState({ status: 'success', error: null });

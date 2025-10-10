@@ -1,59 +1,107 @@
-import numpy as np
-import soundfile as sf
-import onnxruntime as ort
-from scipy.signal import resample_poly
+"""
+Backend vocal separator - wraps the vocal_model package for FastAPI integration.
+"""
+import sys
 import os
+import tempfile
+import torch
+import soundfile as sf
+from pathlib import Path
 
-# This would be the path to the ONNX model file you generate
-MODEL_PATH = "models/mel_band_roformer.onnx"
+# Add the parent directory to the path so we can import vocal_model
+backend_dir = Path(__file__).parent
+project_root = backend_dir.parent
+sys.path.insert(0, str(project_root))
+
+from vocal_model.separator import VocalSeparator as VocalModelSeparator
 
 class VocalSeparator:
-    def __init__(self, model_path=MODEL_PATH):
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model not found at {model_path}. Please ensure you have generated the ONNX model.")
-        
-        self.session = ort.InferenceSession(model_path)
-        self.input_name = self.session.get_inputs()[0].name
-        # Assuming the model has two outputs: vocals, instrumentals
-        self.output_names = [output.name for output in self.session.get_outputs()]
+    """Wrapper around vocal_model.VocalSeparator for backend use."""
 
-    def separate(self, audio_path: str) -> (np.ndarray, np.ndarray, int):
+    def __init__(self, model_path: str = None, quantized: bool = False):
+        """
+        Initialize the vocal separator.
+
+        Args:
+            model_path: Path to the safetensors model file. If None, uses default.
+            quantized: Whether to use the quantized model (faster on CPU).
+        """
+        if model_path is None:
+            if quantized:
+                model_path = project_root / "vocal_model" / "melband_roformer_vocals_quantized.safetensors"
+            else:
+                model_path = project_root / "vocal_model" / "melband_roformer_vocals.safetensors"
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"Model not found at {model_path}. "
+                f"Please run: python convert_checkpoint.py"
+                + (" --quantize" if quantized else "")
+            )
+
+        config_path = project_root / "vocal_model" / "config.yaml"
+
+        print(f"Loading vocal separator (quantized={quantized})...")
+        self.separator = VocalModelSeparator(
+            model_path=str(model_path),
+            config_path=str(config_path),
+            device="cpu"  # Force CPU for backend deployment
+        )
+        print("Vocal separator loaded successfully!")
+
+    def separate(self, audio_path: str) -> tuple[str, str, int]:
         """
         Separates an audio file into vocals and instrumentals.
-        Returns: (vocals, instrumentals, sample_rate)
+
+        Args:
+            audio_path: Path to the input audio file
+
+        Returns:
+            (vocals_path, instrumental_path, sample_rate)
+            The returned paths are temporary files that should be cleaned up by the caller.
         """
-        try:
-            wav, sr = sf.read(audio_path)
-        except Exception as e:
-            raise IOError(f"Could not read audio file: {e}")
+        print(f"Processing: {audio_path}")
 
-        # Convert to mono if it's stereo
-        if wav.ndim > 1:
-            wav = np.mean(wav, axis=1)
+        # Load audio
+        wav, sr = sf.read(audio_path)
 
-        # Resample to model's expected sample rate (e.g., 44100)
-        target_sr = 44100
+        # soundfile returns [samples, channels], we need [channels, samples]
+        if wav.ndim == 2:
+            wav = wav.T  # Transpose to [channels, samples]
+
+        original_tensor = torch.from_numpy(wav).float()
+
+        # Ensure stereo
+        if original_tensor.dim() == 1:
+            original_tensor = original_tensor.unsqueeze(0).repeat(2, 1)
+        elif original_tensor.shape[0] == 1:
+            original_tensor = original_tensor.repeat(2, 1)
+
+        # Resample if needed
+        target_sr = self.separator.config.model.sample_rate
         if sr != target_sr:
-            wav = resample_poly(wav, target_sr, sr)
-            sr = target_sr
+            print(f"Resampling from {sr} Hz to {target_sr} Hz...")
+            import librosa
+            resampled = librosa.resample(
+                original_tensor.numpy(),
+                orig_sr=sr,
+                target_sr=target_sr
+            )
+            original_tensor = torch.from_numpy(resampled).float()
 
-        # Placeholder for the actual overlap-add processing loop
-        # In a real implementation, you would chunk the audio, process each chunk,
-        # and merge the results.
-        # For this placeholder, we'll just process the beginning of the audio.
-        max_length = 10 * sr # Process up to 10 seconds for this example
-        wav_chunk = wav[:max_length]
-        wav_chunk = np.expand_dims(wav_chunk, axis=0).astype(np.float32)
+        # Separate vocals
+        vocals_tensor = self.separator.separate(original_tensor.to(self.separator.device))
 
-        # Run inference
-        result = self.session.run(self.output_names, {self.input_name: wav_chunk})
-        
-        vocals = result[0][0]
-        instrumentals = result[1][0]
+        # Calculate instrumental
+        instrumental_tensor = original_tensor - vocals_tensor.cpu()
 
-        return vocals, instrumentals, sr
+        # Save to temporary files
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as vocal_file:
+            vocals_path = vocal_file.name
+            sf.write(vocals_path, vocals_tensor.cpu().numpy().T, target_sr)
 
-# Example usage (for testing)
-if __name__ == '__main__':
-    # This part would require a dummy model and a test audio file to run.
-    print("Separator service module loaded.")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as inst_file:
+            instrumental_path = inst_file.name
+            sf.write(instrumental_path, instrumental_tensor.numpy().T, target_sr)
+
+        return vocals_path, instrumental_path, target_sr

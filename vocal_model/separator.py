@@ -43,14 +43,25 @@ class VocalSeparator:
             config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 
         print(f"Loading configuration from: {config_path}")
-        with open(config_path) as f:
-            self.config = OmegaConf.create(yaml.safe_load(f))
+        self.config = OmegaConf.load(config_path)
+
+        # Convert to container to handle OmegaConf types
+        config_dict = OmegaConf.to_container(self.config, resolve=True)
+
+        # Convert list to tuple for multi_stft_resolutions_window_sizes
+        if 'multi_stft_resolutions_window_sizes' in config_dict['model']:
+            config_dict['model']['multi_stft_resolutions_window_sizes'] = tuple(
+                config_dict['model']['multi_stft_resolutions_window_sizes']
+            )
 
         print("Instantiating model...")
-        self.model = MelBandRoformer(**self.config.model).to(self.device)
+        self.model = MelBandRoformer(**config_dict['model']).to(self.device)
+
+        # Store config for later use (convert back to OmegaConf for dot notation access)
+        self.config = OmegaConf.create(config_dict)
 
         print(f"Loading model weights from: {model_path}")
-        state_dict = load_file(model_path, device=self.device)
+        state_dict = load_file(model_path, device=str(self.device))
         self.model.load_state_dict(state_dict)
         self.model.eval()
 
@@ -81,7 +92,9 @@ class VocalSeparator:
         border = C - step
 
         mix = audio_tensor
-        if mix.shape[1] > 2 * border and border > 0:
+        # Track if we applied border padding
+        padded = mix.shape[1] > 2 * border and border > 0
+        if padded:
             mix = F.pad(mix, (border, border), mode="reflect")
 
         windowing_array = self._get_windowing_array(C, fade_size)
@@ -101,7 +114,13 @@ class VocalSeparator:
                 length = part.shape[-1]
 
                 if length < C:
-                    part = F.pad(input=part, pad=(0, C - length), mode="reflect")
+                    pad_amount = C - length
+                    # Reflection padding requires the input to be at least as long as the pad amount
+                    if length > pad_amount:
+                        part = F.pad(input=part, pad=(0, pad_amount), mode="reflect")
+                    else:
+                        # For very short chunks where reflection won't work, use constant padding
+                        part = F.pad(input=part, pad=(0, pad_amount), mode="constant", value=0)
 
                 # Model expects a batch dimension
                 processed_chunk = self.model(part.unsqueeze(0))[0]
@@ -113,7 +132,8 @@ class VocalSeparator:
 
         estimated_vocals = result / counter
 
-        if mix.shape[1] > 2 * border and border > 0:
+        # Only remove border if we added it
+        if padded:
             estimated_vocals = estimated_vocals[:, border:-border]
 
         return estimated_vocals

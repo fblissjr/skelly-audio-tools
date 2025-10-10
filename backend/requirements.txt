@@ -5,7 +5,16 @@ pydantic
 pytest
 httpx
 requests
-onnxruntime
-soundfile
-scipy
 python-multipart
+# Vocal separation dependencies
+torch
+numpy
+soundfile
+librosa
+tqdm
+pyyaml
+omegaconf
+safetensors
+einops
+beartype
+rotary_embedding_torch

@@ -17,14 +17,16 @@ import type { Region } from 'wavesurfer.js/dist/plugins/regions.esm.js';
 
 const PrepPage: React.FC = () => {
   // Input state
-  const [inputType, setInputType] = useState<'upload' | 'youtube'>('upload');
+  const [inputType, setInputType] = useState<'upload' | 'youtube'>('youtube');
   const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [processingMode, setProcessingMode] = useState<'segmentation' | 'separation'>('segmentation');
+  const [separationDecision, setSeparationDecision] = useState<'undecided' | 'separating' | 'skipped'>('undecided');
 
   // Core audio data state
   const [rawAudioBuffer, setRawAudioBuffer] = useState<AudioBuffer | null>(null);
   const [masterTrack, setMasterTrack] = useState<AudioSegment | null>(null);
   const [processedSegments, setProcessedSegments] = useState<AudioSegment[]>([]);
+  const [instrumentalFile, setInstrumentalFile] = useState<File | null>(null);
+  const [masterTrackFile, setMasterTrackFile] = useState<File | null>(null);
 
   // UI state
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -51,6 +53,9 @@ const PrepPage: React.FC = () => {
     youtube.reset();
     setIsExtracting(false);
     setExtractionProgress(0);
+    setSeparationDecision('undecided');
+    setInstrumentalFile(null);
+    setMasterTrackFile(null);
   }, [youtube]);
 
   const processAndLoadAudio = useCallback(async (audioFile: File) => {
@@ -70,20 +75,25 @@ const PrepPage: React.FC = () => {
     setIsProcessing(true);
     setError(null);
 
+    let audioFileToProcess = file;
+
     if (file.type.startsWith('video/')) {
         setIsExtracting(true);
         try {
-            const audioFile = await extractAudio(file, setExtractionProgress);
-            await processAndLoadAudio(audioFile);
+            audioFileToProcess = await extractAudio(file, setExtractionProgress);
         } catch (err: any) {
             setError(`Failed to extract audio from video: ${err.message}`);
             resetState();
+            setIsProcessing(false);
+            return;
         } finally {
             setIsExtracting(false);
         }
-    } else {
-        await processAndLoadAudio(file);
     }
+
+    // Store the audio file for vocal separation
+    setMasterTrackFile(audioFileToProcess);
+    await processAndLoadAudio(audioFileToProcess);
 
     setIsProcessing(false);
   }, [resetState, processAndLoadAudio]);
@@ -147,98 +157,224 @@ const PrepPage: React.FC = () => {
   const handleSegmentSettingsChange = (id: number, settings: any) => {
     setProcessedSegments(prev => prev.map(seg => seg.id === id ? { ...seg, ...settings } : seg));
   };
+
+  const handleSegmentSeparateVocals = async (segmentId: number, segmentFile: File) => {
+    try {
+      // Call the vocal separation backend
+      const formData = new FormData();
+      formData.append("file", segmentFile);
+
+      const response = await fetch("http://localhost:8000/separate-vocals", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: "Separation failed" }));
+        throw new Error(errorData.detail || "Separation failed");
+      }
+
+      const blob = await response.blob();
+
+      // Extract files from ZIP
+      const JSZip = (await import('jszip')).default;
+      const zip = await JSZip.loadAsync(blob);
+
+      const vocalsBlob = await zip.file('vocals.wav')?.async('blob');
+      const instrumentalBlob = await zip.file('instrumental.wav')?.async('blob');
+
+      if (!vocalsBlob || !instrumentalBlob) {
+        throw new Error('Failed to extract files from ZIP');
+      }
+
+      // Create blob URLs
+      const vocalsBlobUrl = URL.createObjectURL(vocalsBlob);
+      const instrumentalBlobUrl = URL.createObjectURL(instrumentalBlob);
+
+      // Update the segment
+      setProcessedSegments(prev => prev.map(seg => {
+        if (seg.id === segmentId) {
+          return {
+            ...seg,
+            originalMixBlobUrl: seg.blobUrl, // Store original
+            blobUrl: vocalsBlobUrl, // Replace with vocals-only
+            instrumentalBlobUrl: instrumentalBlobUrl,
+            isSeparated: true,
+          };
+        }
+        return seg;
+      }));
+
+    } catch (err: any) {
+      setError(`Failed to separate vocals for segment: ${err.message}`);
+    }
+  };
   
   return (
     <div className="max-w-4xl w-full mx-auto">
       <Header />
       <main className="mt-8 space-y-12">
         <Instructions />
-        <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
-          <div className="flex border-b border-slate-700">
-            <button
-              onClick={() => setProcessingMode('segmentation')}
-              className={`flex-1 p-4 font-semibold text-center transition-colors duration-200 rounded-tl-xl ${
-                processingMode === 'segmentation'
-                  ? 'bg-slate-700/50 text-orange-400 border-b-2 border-orange-400'
-                  : 'text-slate-400 hover:bg-slate-700/30'
-              }`}>
-              Segmentation Tools
-            </button>
-            <button
-              onClick={() => setProcessingMode('separation')}
-              className={`flex-1 p-4 font-semibold text-center transition-colors duration-200 rounded-tr-xl ${
-                processingMode === 'separation'
-                  ? 'bg-slate-700/50 text-orange-400 border-b-2 border-orange-400'
-                  : 'text-slate-400 hover:bg-slate-700/30'
-              }`}>
-              AI Vocal Separation
-            </button>
+
+        {/* Step 1: Input Source Selection */}
+        {!masterTrack && !isProcessing && (
+          <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
+            <div className="p-6 space-y-6">
+              <div className="text-center">
+                <h2 className="text-2xl font-bold text-slate-200">Step 1: Select Audio Source</h2>
+                <p className="text-slate-400 mt-2">Choose how you want to load your audio</p>
+              </div>
+
+              {/* Input Type Toggle */}
+              <div className="flex justify-center space-x-4">
+                <button
+                  onClick={() => setInputType('youtube')}
+                  className={`px-6 py-3 font-semibold rounded-lg transition-all duration-200 ${
+                    inputType === 'youtube'
+                      ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-lg'
+                      : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                  }`}>
+                  YouTube URL
+                </button>
+                <button
+                  onClick={() => setInputType('upload')}
+                  className={`px-6 py-3 font-semibold rounded-lg transition-all duration-200 ${
+                    inputType === 'upload'
+                      ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-lg'
+                      : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                  }`}>
+                  Upload File
+                </button>
+              </div>
+
+              {/* Input UI */}
+              {inputType === 'upload' && <FileUpload onFileChange={handleFileLoad} />}
+              {inputType === 'youtube' && (
+                <div className="space-y-4">
+                  <p className="text-center text-slate-400">Paste a YouTube URL below to fetch its audio.</p>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      value={youtubeUrl}
+                      onChange={(e) => setYoutubeUrl(e.target.value)}
+                      placeholder="e.g., https://www.youtube.com/watch?v=..."
+                      className="w-full pl-4 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-200 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-colors"
+                      disabled={youtube.status === 'fetching'}
+                    />
+                    <button
+                      onClick={handleYouTubeFetch}
+                      disabled={!youtubeUrl || youtube.status === 'fetching'}
+                      className="px-6 py-2 font-bold text-white bg-gradient-to-r from-orange-500 to-red-600 rounded-lg shadow-lg hover:from-orange-600 hover:to-red-700 transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100">
+                      Fetch Audio
+                    </button>
+                  </div>
+                  <YouTubeHistory onLoad={handleLoadFromHistory} />
+                </div>
+              )}
+            </div>
           </div>
+        )}
 
-          <div className="p-6">
-            {processingMode === 'separation' && <VocalSeparation />}
-            {processingMode === 'segmentation' && (
-              <>
-                {!masterTrack && !isProcessing && (
-                  <>
-                    {inputType === 'upload' && <FileUpload onFileChange={handleFileLoad} />}
-                    {inputType === 'youtube' && (
-                    <div className="space-y-4">
-                        <p className="text-center text-slate-400">Paste a YouTube URL below to fetch its audio.</p>
-                        <div className="flex items-center space-x-2">
-                            <input
-                                type="text"
-                                value={youtubeUrl}
-                                onChange={(e) => setYoutubeUrl(e.target.value)}
-                                placeholder="e.g., https://www.youtube.com/watch?v=..."
-                                className="w-full pl-4 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-200 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-colors"
-                                disabled={youtube.status === 'fetching'}
-                            />
-                            <button 
-                                onClick={handleYouTubeFetch}
-                                disabled={!youtubeUrl || youtube.status === 'fetching'}
-                                className="px-6 py-2 font-bold text-white bg-gradient-to-r from-orange-500 to-red-600 rounded-lg shadow-lg hover:from-orange-600 hover:to-red-700 transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100">
-                                Fetch Audio
-                            </button>
-                        </div>
-                        <YouTubeHistory onLoad={handleLoadFromHistory} />
-                    </div>
-                )}
-                  </>
-                )}
-
-                {(isProcessing || youtube.status === 'fetching') && (
-                <ProcessingIndicator 
-                    text={isExtracting 
-                        ? `Extracting audio from video... (${extractionProgress}%)` 
-                        : (youtube.status === 'fetching' ? 'Fetching audio...' : 'Processing audio...')}
-                />
-            )}
-                {error && <p>{error}</p>}
-                {youtube.error && <p>{youtube.error}</p>}
-
-                {masterTrack && (
-                  <div className="space-y-6">
-                    <ProcessingOptions options={processingOptions} setOptions={setProcessingOptions} />
-                                    <MasterTrackEditor 
-                                        masterTrack={masterTrack}
-                                        isProcessing={isProcessing}
-                                        selectedRegion={selectedRegion}
-                                        activationThreshold={processingOptions.jawSensitivity}
-                                        onRegionChange={setSelectedRegion}
-                                        onAddSegment={handleAddSegment}
-                                        onAutoSplit={handleAutoSplit}
-                                        onSettingsChange={handleMasterTrackSettingsChange}
-                                    />                  </div>
-                )}
-              </>
-            )}
+        {/* Processing Indicator */}
+        {(isProcessing || youtube.status === 'fetching') && (
+          <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700 p-6">
+            <ProcessingIndicator
+              text={isExtracting
+                ? `Extracting audio from video... (${extractionProgress}%)`
+                : (youtube.status === 'fetching' ? 'Fetching audio...' : 'Processing audio...')}
+            />
           </div>
-        </div>
-        
+        )}
+
+        {/* Errors */}
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-4">
+            <p className="text-red-400 text-center">{error}</p>
+          </div>
+        )}
+        {youtube.error && (
+          <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-4">
+            <p className="text-red-400 text-center">{youtube.error}</p>
+          </div>
+        )}
+
+        {/* Optional: Vocal Separation Decision (shown after audio is loaded) */}
+        {masterTrack && separationDecision === 'undecided' && (
+          <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
+            <div className="p-6 text-center space-y-4">
+              <div>
+                <h3 className="text-xl font-bold text-slate-200">Optional: Separate Vocals</h3>
+                <p className="text-slate-400 mt-2">Use AI to isolate vocals from music before segmentation</p>
+                <p className="text-sm text-slate-500 mt-1">This helps Skelly get cleaner vocal segments</p>
+              </div>
+              <div className="flex justify-center space-x-4">
+                <button
+                  onClick={() => setSeparationDecision('separating')}
+                  className="px-6 py-3 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-semibold rounded-lg transition-all duration-300 transform hover:scale-105">
+                  Separate Vocals
+                </button>
+                <button
+                  onClick={() => setSeparationDecision('skipped')}
+                  className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-slate-300 font-semibold rounded-lg transition-colors">
+                  Skip - Continue to Segmentation
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Vocal Separation UI */}
+        {masterTrack && separationDecision === 'separating' && (
+          <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
+            <div className="p-6">
+              <VocalSeparation
+                audioFile={masterTrackFile}
+                onVocalsExtracted={(vocalsFile, instrumentalFileFromSeparation) => {
+                  setSeparationDecision('skipped');
+                  setInstrumentalFile(instrumentalFileFromSeparation);
+                  handleFileLoad(vocalsFile);
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Audio Segmentation Tools (shown after audio is loaded and separation is skipped/completed) */}
+        {masterTrack && separationDecision === 'skipped' && (
+          <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
+            <div className="p-6 space-y-6">
+              <div className="text-center border-b border-slate-700 pb-4">
+                <h2 className="text-2xl font-bold text-slate-200">Step 2: Audio Segmentation</h2>
+                <p className="text-slate-400 mt-2">Split your audio into segments for Skelly</p>
+                {instrumentalFile && (
+                  <div className="mt-3 inline-block px-4 py-2 bg-green-500/10 border border-green-500/50 rounded-lg">
+                    <p className="text-green-400 text-sm">Instrumental track stored for recombination</p>
+                  </div>
+                )}
+              </div>
+              <ProcessingOptions options={processingOptions} setOptions={setProcessingOptions} />
+              <MasterTrackEditor
+                masterTrack={masterTrack}
+                isProcessing={isProcessing}
+                selectedRegion={selectedRegion}
+                activationThreshold={processingOptions.jawSensitivity}
+                onRegionChange={setSelectedRegion}
+                onAddSegment={handleAddSegment}
+                onAutoSplit={handleAutoSplit}
+                onSettingsChange={handleMasterTrackSettingsChange}
+              />
+            </div>
+          </div>
+        )}
+
         {processedSegments.length > 0 && (
           <div className="animate-fade-in mt-12">
-            <Results segments={processedSegments} onSegmentSettingsChange={handleSegmentSettingsChange} />
+            <Results
+              segments={processedSegments}
+              onSegmentSettingsChange={handleSegmentSettingsChange}
+              onSeparateVocals={handleSegmentSeparateVocals}
+              globalInstrumentalFile={instrumentalFile}
+            />
           </div>
         )}
       </main>
