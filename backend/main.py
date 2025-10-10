@@ -80,10 +80,20 @@ async def separate_vocals(
     try:
         content = await file.read()
         temp_input.write(content)
+        temp_input.flush()  # Ensure data is written to disk
         temp_input.close()
 
+        # Verify file was created
+        if not os.path.exists(temp_input.name):
+            raise Exception(f"Temporary file was not created: {temp_input.name}")
+
+        file_size = os.path.getsize(temp_input.name)
+        if file_size == 0:
+            raise Exception(f"Temporary file is empty: {temp_input.name}")
+
+        print(f"Starting separation for: {file.filename} (temp file: {temp_input.name}, size: {file_size} bytes)")
+
         # Process the audio (this is CPU-intensive and will block)
-        print(f"Starting separation for: {file.filename}")
         vocals_path, instrumental_path, sr = separator.separate(temp_input.name)
         print(f"Separation complete for: {file.filename}")
 
@@ -150,49 +160,43 @@ async def get_audio_url(request: VideoRequest):
         video_id = info.get('id', 'unknown')
         video_title = info.get('title', 'Unknown Title')
 
-        # Check if already cached
-        cached_file = None
-        for ext in ['.m4a', '.mp3', '.webm', '.opus']:
-            potential_file = cache_dir / f"{video_id}{ext}"
-            if potential_file.exists():
-                cached_file = potential_file
-                print(f"Using cached file: {cached_file}")
-                break
+        # Check if already cached (always MP3)
+        cached_file = cache_dir / f"{video_id}.mp3"
 
-        if not cached_file:
-            # Download to cache
-            print(f"Downloading {video_id} to cache...")
+        if not cached_file.exists():
+            # Download and convert to MP3
+            print(f"Downloading {video_id} to cache and converting to MP3...")
             YDL_OPTIONS = {
                 'format': 'bestaudio/best',
                 'noplaylist': True,
                 'outtmpl': str(cache_dir / f'{video_id}.%(ext)s'),
                 'quiet': False,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
             }
 
             with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
                 ydl.download([request.url])
 
-            # Find the downloaded file
-            for ext in ['.m4a', '.mp3', '.webm', '.opus']:
-                potential_file = cache_dir / f"{video_id}{ext}"
-                if potential_file.exists():
-                    cached_file = potential_file
-                    break
+            if not cached_file.exists():
+                raise HTTPException(status_code=500, detail="Download succeeded but MP3 file not found in cache")
+        else:
+            print(f"Using cached MP3 file: {cached_file}")
 
-            if not cached_file:
-                raise HTTPException(status_code=500, detail="Download succeeded but file not found in cache")
-
-        # Serve the cached file
+        # Serve the MP3 file
         headers = {
             "X-Video-Title": quote(video_title.encode('utf-8')),
-            "Content-Type": "audio/mp4",
+            "Content-Type": "audio/mpeg",
         }
 
         return FileResponse(
             path=cached_file,
             headers=headers,
-            media_type="audio/mp4",
-            filename=f"{video_title}.{cached_file.suffix}"
+            media_type="audio/mpeg",
+            filename=f"{video_title}.mp3"
         )
 
     except yt_dlp.utils.DownloadError as e:
