@@ -11,7 +11,9 @@ from omegaconf import OmegaConf
 from safetensors.torch import load_file
 
 # Local imports for the model architecture
-from .mel_band_roformer import MelBandRoformer
+from .mel_band_roformer import MelBandRoformer, BS_ROFORMER_AVAILABLE
+if BS_ROFORMER_AVAILABLE:
+    from bs_roformer import BSRoformer
 
 
 class VocalSeparator:
@@ -54,8 +56,29 @@ class VocalSeparator:
                 config_dict['model']['multi_stft_resolutions_window_sizes']
             )
 
-        print("Instantiating model...")
-        self.model = MelBandRoformer(**config_dict['model']).to(self.device)
+        # Convert freqs_per_bands to tuple if it exists (for BSRoformer)
+        if 'freqs_per_bands' in config_dict['model']:
+            config_dict['model']['freqs_per_bands'] = tuple(
+                config_dict['model']['freqs_per_bands']
+            )
+
+        # Detect model type based on config
+        # BSRoformer uses freqs_per_bands, MelBandRoformer uses num_bands
+        if 'freqs_per_bands' in config_dict['model']:
+            if not BS_ROFORMER_AVAILABLE:
+                raise ImportError("BS-Roformer model requires 'bs-roformer' package. Install with: pip install bs-roformer")
+            model_class = BSRoformer
+            model_name = "BS-Roformer"
+            # Filter out params that BSRoformer doesn't accept
+            model_params = {k: v for k, v in config_dict['model'].items()
+                          if k != 'linear_transformer_depth'}
+        else:
+            model_class = MelBandRoformer
+            model_name = "Mel-Band RoFormer"
+            model_params = config_dict['model']
+
+        print(f"Instantiating {model_name} model...")
+        self.model = model_class(**model_params).to(self.device)
 
         # Store config for later use (convert back to OmegaConf for dot notation access)
         self.config = OmegaConf.create(config_dict)
@@ -85,8 +108,17 @@ class VocalSeparator:
         Returns:
             torch.Tensor: A stereo tensor of the separated vocals.
         """
-        C = self.config.inference.chunk_size
-        N = self.config.inference.num_overlap
+        # Handle different config structures
+        if hasattr(self.config, 'inference') and hasattr(self.config.inference, 'chunk_size'):
+            C = self.config.inference.chunk_size
+            N = self.config.inference.num_overlap
+        elif hasattr(self.config, 'audio'):
+            C = self.config.audio.chunk_size
+            N = self.config.inference.num_overlap if hasattr(self.config, 'inference') else 4
+        else:
+            # Fallback defaults
+            C = 352800
+            N = 2
         step = C // N
         fade_size = C // 10
         border = C - step

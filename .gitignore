@@ -9,6 +9,12 @@ lerna-debug.log*
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
+# safetensors
+*.safetensors
+vocal_model/__pycache__/
+vocal_model/*.ckpt
+vocal_model/*.safetensors
+
 # Runtime data
 pids
 *.pid

@@ -63,7 +63,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileChange, promptMessage }) 
         ref={fileInputRef}
         type="file"
         onChange={handleFileSelect}
-        accept="audio/mpeg, audio/wav, audio/ogg, video/mp4, video/webm, video/quicktime"
+        accept="audio/mpeg, audio/wav, audio/ogg, audio/m4a, audio/aac, video/mp4, video/webm, video/quicktime, video/x-msvideo, video/x-matroska"
         className="hidden"
       />
 
@@ -80,7 +80,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileChange, promptMessage }) 
       >
         <i className="ph-bold ph-music-notes-simple text-4xl mb-2"></i>
         <span>{promptMessage || 'Click or drop an audio file here'}</span>
-        <span className="text-sm text-slate-500 mt-1">MP3, WAV, M4A, etc.</span>
+        <span className="text-sm text-slate-500 mt-1">Audio: MP3, WAV, M4A | Video: MP4, MOV, AVI, MKV</span>
       </div>
     </div>
   );

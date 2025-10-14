@@ -31,17 +31,29 @@ export async function extractAudio(videoFile: File, progressCallback: (progress:
         progressCallback(Math.round(progress * 100));
     });
 
-    await ffmpeg.writeFile(videoFile.name, videoFile);
+    // Use a sanitized filename to avoid issues with special characters
+    const inputFileName = 'input' + videoFile.name.substring(videoFile.name.lastIndexOf('.'));
+    await ffmpeg.writeFile(inputFileName, new Uint8Array(await videoFile.arrayBuffer()));
 
     // Run FFmpeg command to extract audio as MP3
     // -i: input file
     // -vn: no video output
-    // -acodec libmp3lame: use MP3 codec
-    // -q:a 2: audio quality (0-9, lower is better)
-    await ffmpeg.exec(['-i', videoFile.name, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', 'output.mp3']);
+    // -b:a 192k: audio bitrate 192kbps (good quality, smaller file)
+    // -ar 44100: sample rate 44.1kHz
+    await ffmpeg.exec([
+        '-i', inputFileName,
+        '-vn',
+        '-b:a', '192k',
+        '-ar', '44100',
+        'output.mp3'
+    ]);
 
     const data = await ffmpeg.readFile('output.mp3');
-    const audioFileBlob = new Blob([data], { type: 'audio/mpeg' });
-    
+    const audioFileBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
+
+    // Clean up
+    await ffmpeg.deleteFile(inputFileName);
+    await ffmpeg.deleteFile('output.mp3');
+
     return new File([audioFileBlob], 'extracted_audio.mp3', { type: 'audio/mpeg' });
 }

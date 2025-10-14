@@ -18,28 +18,34 @@ from vocal_model.separator import VocalSeparator as VocalModelSeparator
 class VocalSeparator:
     """Wrapper around vocal_model.VocalSeparator for backend use."""
 
-    def __init__(self, model_path: str = None, quantized: bool = False):
+    def __init__(self, model_path: str = None, config_path: str = None, quantized: bool = False):
         """
         Initialize the vocal separator.
 
         Args:
-            model_path: Path to the safetensors model file. If None, uses default.
+            model_path: Path to the safetensors model file. If None, uses BS-Roformer by default.
+            config_path: Path to config file. If None, auto-detects based on model.
             quantized: Whether to use the quantized model (faster on CPU).
         """
         if model_path is None:
-            if quantized:
-                model_path = project_root / "vocal_model" / "melband_roformer_vocals_quantized.safetensors"
-            else:
-                model_path = project_root / "vocal_model" / "melband_roformer_vocals.safetensors"
+            # Default to Tommy's Mel-Band RoFormer (12 layers, better quality)
+            model_path = project_root / "vocal_model" / "model_vocals_tommy.safetensors"
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
                 f"Model not found at {model_path}. "
-                f"Please run: python convert_checkpoint.py"
-                + (" --quantize" if quantized else "")
+                f"Please ensure the model file exists."
             )
 
-        config_path = project_root / "vocal_model" / "config.yaml"
+        # Auto-detect config if not provided
+        if config_path is None:
+            model_name = os.path.basename(model_path)
+            if 'bs_roformer' in model_name.lower():
+                config_path = project_root / "vocal_model" / "config_bs_roformer.yaml"
+            elif 'tommy' in model_name.lower():
+                config_path = project_root / "vocal_model" / "config_vocals_tommy.yaml"
+            else:
+                config_path = project_root / "vocal_model" / "config.yaml"
 
         print(f"Loading vocal separator (quantized={quantized})...")
         self.separator = VocalModelSeparator(

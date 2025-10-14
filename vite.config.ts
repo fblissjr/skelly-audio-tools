@@ -18,6 +18,12 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      optimizeDeps: {
+        exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util']
+      },
+      worker: {
+        format: 'es'
       }
     };
 });

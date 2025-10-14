@@ -16,6 +16,14 @@ from einops import rearrange, pack, unpack, reduce, repeat
 
 from librosa import filters
 
+# Import BS-Roformer from the official library
+try:
+    from bs_roformer import BSRoformer as BSRoformer_lib
+    BS_ROFORMER_AVAILABLE = True
+except ImportError:
+    BS_ROFORMER_AVAILABLE = False
+    BSRoformer_lib = None
+
 
 # helper functions
 
@@ -534,6 +542,275 @@ class MelBandRoformer(Module):
         for window_size in self.multi_stft_resolutions_window_sizes:
             res_stft_kwargs = dict(
                 n_fft=max(window_size, self.multi_stft_n_fft),  # not sure what n_fft is across multi resolution stft
+                win_length=window_size,
+                return_complex=True,
+                window=self.multi_stft_window_fn(window_size, device=device),
+                **self.multi_stft_kwargs,
+            )
+
+            recon_Y = torch.stft(rearrange(recon_audio, '... s t -> (... s) t'), **res_stft_kwargs)
+            target_Y = torch.stft(rearrange(target, '... s t -> (... s) t'), **res_stft_kwargs)
+
+            multi_stft_resolution_loss = multi_stft_resolution_loss + F.l1_loss(recon_Y, target_Y)
+
+        weighted_multi_resolution_loss = multi_stft_resolution_loss * self.multi_stft_resolution_loss_weight
+
+        total_loss = loss + weighted_multi_resolution_loss
+
+        if not return_loss_breakdown:
+            return total_loss
+
+        return total_loss, (loss, multi_stft_resolution_loss)
+
+
+# Band-Split RoFormer - uses custom frequency band splits instead of mel bands
+class BSRoformer(Module):
+
+    @beartype
+    def __init__(
+            self,
+            dim,
+            *,
+            depth,
+            stereo=False,
+            num_stems=1,
+            time_transformer_depth=2,
+            freq_transformer_depth=2,
+            linear_transformer_depth=0,
+            freqs_per_bands: Tuple[int, ...] = (),  # custom frequency splits
+            dim_head=64,
+            heads=8,
+            attn_dropout=0.1,
+            ff_dropout=0.1,
+            flash_attn=True,
+            dim_freqs_in=1025,
+            stft_n_fft=2048,
+            stft_hop_length=512,
+            stft_win_length=2048,
+            stft_normalized=False,
+            stft_window_fn: Optional[Callable] = None,
+            mask_estimator_depth=1,
+            multi_stft_resolution_loss_weight=1.,
+            multi_stft_resolutions_window_sizes: Tuple[int, ...] = (4096, 2048, 1024, 512, 256),
+            multi_stft_hop_size=147,
+            multi_stft_normalized=False,
+            multi_stft_window_fn: Callable = torch.hann_window,
+            match_input_audio_length=False,
+            **kwargs  # ignore extra params from config
+    ):
+        super().__init__()
+
+        self.stereo = stereo
+        self.audio_channels = 2 if stereo else 1
+        self.num_stems = num_stems
+
+        self.layers = ModuleList([])
+
+        transformer_kwargs = dict(
+            dim=dim,
+            heads=heads,
+            dim_head=dim_head,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
+            flash_attn=flash_attn
+        )
+
+        time_rotary_embed = RotaryEmbedding(dim=dim_head)
+        freq_rotary_embed = RotaryEmbedding(dim=dim_head)
+
+        for _ in range(depth):
+            self.layers.append(nn.ModuleList([
+                Transformer(depth=time_transformer_depth, rotary_embed=time_rotary_embed, **transformer_kwargs),
+                Transformer(depth=freq_transformer_depth, rotary_embed=freq_rotary_embed, **transformer_kwargs)
+            ]))
+
+        self.stft_window_fn = partial(default(stft_window_fn, torch.hann_window), stft_win_length)
+
+        self.stft_kwargs = dict(
+            n_fft=stft_n_fft,
+            hop_length=stft_hop_length,
+            win_length=stft_win_length,
+            normalized=stft_normalized
+        )
+
+        # use custom frequency band splits (key difference from MelBandRoformer)
+        assert len(freqs_per_bands) > 0, 'freqs_per_bands must be specified for BSRoformer'
+
+        # calculate frequency indices based on custom band splits
+        freqs_per_bands_list = list(freqs_per_bands)
+        num_bands = len(freqs_per_bands_list)
+
+        # create band assignments
+        freq_indices_list = []
+        freqs_per_band_bool = []
+
+        curr_freq = 0
+        for band_idx, freqs_in_band in enumerate(freqs_per_bands_list):
+            for _ in range(freqs_in_band):
+                if curr_freq < dim_freqs_in:
+                    freq_indices_list.append((band_idx, curr_freq))
+                    curr_freq += 1
+
+        # create boolean mask similar to mel bands
+        freqs_per_band_tensor = torch.zeros(num_bands, dim_freqs_in, dtype=torch.bool)
+        curr_freq = 0
+        for band_idx, freqs_in_band in enumerate(freqs_per_bands_list):
+            for i in range(freqs_in_band):
+                if curr_freq < dim_freqs_in:
+                    freqs_per_band_tensor[band_idx, curr_freq] = True
+                    curr_freq += 1
+
+        repeated_freq_indices = repeat(torch.arange(dim_freqs_in), 'f -> b f', b=num_bands)
+        freq_indices = repeated_freq_indices[freqs_per_band_tensor]
+
+        if stereo:
+            freq_indices = repeat(freq_indices, 'f -> f s', s=2)
+            freq_indices = freq_indices * 2 + torch.arange(2)
+            freq_indices = rearrange(freq_indices, 'f s -> (f s)')
+
+        self.register_buffer('freq_indices', freq_indices, persistent=False)
+        self.register_buffer('freqs_per_band', freqs_per_band_tensor, persistent=False)
+
+        num_freqs_per_band = reduce(freqs_per_band_tensor, 'b f -> b', 'sum')
+        num_bands_per_freq = reduce(freqs_per_band_tensor, 'b f -> f', 'sum')
+
+        self.register_buffer('num_freqs_per_band', num_freqs_per_band, persistent=False)
+        self.register_buffer('num_bands_per_freq', num_bands_per_freq, persistent=False)
+
+        # band split and mask estimator
+        freqs_per_bands_with_complex = tuple(2 * f * self.audio_channels for f in num_freqs_per_band.tolist())
+
+        self.band_split = BandSplit(
+            dim=dim,
+            dim_inputs=freqs_per_bands_with_complex
+        )
+
+        self.mask_estimators = nn.ModuleList([])
+
+        for _ in range(num_stems):
+            mask_estimator = MaskEstimator(
+                dim=dim,
+                dim_inputs=freqs_per_bands_with_complex,
+                depth=mask_estimator_depth
+            )
+
+            self.mask_estimators.append(mask_estimator)
+
+        # for the multi-resolution stft loss
+        self.multi_stft_resolution_loss_weight = multi_stft_resolution_loss_weight
+        self.multi_stft_resolutions_window_sizes = multi_stft_resolutions_window_sizes
+        self.multi_stft_n_fft = stft_n_fft
+        self.multi_stft_window_fn = multi_stft_window_fn
+
+        self.multi_stft_kwargs = dict(
+            hop_length=multi_stft_hop_size,
+            normalized=multi_stft_normalized
+        )
+
+        self.match_input_audio_length = match_input_audio_length
+
+    def forward(
+            self,
+            raw_audio,
+            target=None,
+            return_loss_breakdown=False
+    ):
+        """
+        Same forward pass as MelBandRoformer
+        """
+        device = raw_audio.device
+
+        if raw_audio.ndim == 2:
+            raw_audio = rearrange(raw_audio, 'b t -> b 1 t')
+
+        batch, channels, raw_audio_length = raw_audio.shape
+
+        istft_length = raw_audio_length if self.match_input_audio_length else None
+
+        assert (not self.stereo and channels == 1) or (
+                    self.stereo and channels == 2), 'stereo needs to be set to True if passing in audio signal that is stereo (channel dimension of 2). also need to be False if mono (channel dimension of 1)'
+
+        # to stft
+        raw_audio, batch_audio_channel_packed_shape = pack_one(raw_audio, '* t')
+
+        stft_window = self.stft_window_fn(device=device)
+
+        stft_repr = torch.stft(raw_audio, **self.stft_kwargs, window=stft_window, return_complex=True)
+        stft_repr = torch.view_as_real(stft_repr)
+
+        stft_repr = unpack_one(stft_repr, batch_audio_channel_packed_shape, '* f t c')
+        stft_repr = rearrange(stft_repr, 'b s f t c -> b (f s) t c')
+
+        batch_arange = torch.arange(batch, device=device)[..., None]
+
+        # gather frequencies into bands
+        x = stft_repr[batch_arange, self.freq_indices]
+        x = rearrange(x, 'b n t c -> b n t c')
+
+        # band split
+        x = self.band_split(x)
+
+        # axial / hierarchical attention
+        for time_transformer, freq_transformer in self.layers:
+            x = time_transformer(x, rearrange_pattern='b n f d -> b (n f) d')
+            x = freq_transformer(x, rearrange_pattern='b n f d -> b (f n) d')
+
+        num_stems = len(self.mask_estimators)
+
+        masks = torch.stack([fn(x) for fn in self.mask_estimators], dim=1)
+        masks = rearrange(masks, 'b n f t c -> b n (f c) t')
+
+        # get the frequency dimension for averaging
+        stft_repr = rearrange(stft_repr, 'b f t c -> b f (t c)')
+
+        masks_summed = torch.zeros(batch, num_stems, stft_repr.shape[-2], stft_repr.shape[-1], device=device)
+        masks_summed_count = torch.zeros(batch, num_stems, stft_repr.shape[-2], 1, device=device)
+
+        batch_arange = torch.arange(batch, device=device)[..., None, None]
+        stem_arange = torch.arange(num_stems, device=device)[None, :, None]
+
+        masks_summed[batch_arange, stem_arange, self.freq_indices] = masks_summed[batch_arange, stem_arange, self.freq_indices] + masks
+        masks_summed_count[batch_arange, stem_arange, self.freq_indices] = masks_summed_count[batch_arange, stem_arange, self.freq_indices] + 1
+
+        masks_averaged = masks_summed / masks_summed_count.clamp(min=1e-8)
+
+        masks_averaged = rearrange(masks_averaged, 'b n f (t c) -> b n f t c', c=2)
+
+        stft_repr = rearrange(stft_repr, 'b f (t c) -> b 1 f t c', c=2)
+
+        # modulate stft repr with estimated mask
+        stft_repr = stft_repr * masks_averaged
+
+        # istft
+        stft_repr = rearrange(stft_repr, 'b n (f s) t -> (b n s) f t', s=self.audio_channels)
+
+        recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False,
+                                  length=istft_length)
+
+        recon_audio = rearrange(recon_audio, '(b n s) t -> b n s t', b=batch, s=self.audio_channels, n=num_stems)
+
+        if num_stems == 1:
+            recon_audio = rearrange(recon_audio, 'b 1 s t -> b s t')
+
+        # if a target is passed in, calculate loss for learning
+        if not exists(target):
+            return recon_audio
+
+        if self.num_stems > 1:
+            assert target.ndim == 4 and target.shape[1] == self.num_stems
+
+        if target.ndim == 2:
+            target = rearrange(target, '... t -> ... 1 t')
+
+        target = target[..., :recon_audio.shape[-1]]
+
+        loss = F.l1_loss(recon_audio, target)
+
+        multi_stft_resolution_loss = 0.
+
+        for window_size in self.multi_stft_resolutions_window_sizes:
+            res_stft_kwargs = dict(
+                n_fft=max(window_size, self.multi_stft_n_fft),
                 win_length=window_size,
                 return_complex=True,
                 window=self.multi_stft_window_fn(window_size, device=device),
