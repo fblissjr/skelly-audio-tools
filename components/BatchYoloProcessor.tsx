@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { getAudio, getAllAudioRecords, deleteAudio } from '../services/database';
+import { generateFilename, removeExtension, getProperExtension } from '../services/filenameUtils';
 
 const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL?.replace('/get-audio-url', '') || 'http://localhost:8000';
 
@@ -513,25 +514,38 @@ const ProcessedResult: React.FC<{
           {/* Download Buttons */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <button
-              onClick={() => onDownload(result.originalUrl, `original_${result.sourceName}`)}
+              onClick={() => {
+                const baseName = removeExtension(result.sourceName);
+                const ext = getProperExtension('original', result.sourceName);
+                onDownload(result.originalUrl, `${baseName}_original${ext}`);
+              }}
               className="px-3 py-2 bg-slate-600 text-white rounded hover:bg-slate-500 text-sm">
               <i className="ph-bold ph-download-simple mr-1"></i>
               Original
             </button>
             <button
-              onClick={() => onDownload(result.vocalsUrl, `vocals_${result.sourceName}`)}
+              onClick={() => {
+                const baseName = removeExtension(result.sourceName);
+                onDownload(result.vocalsUrl, generateFilename('vocals', baseName));
+              }}
               className="px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-500 text-sm">
               <i className="ph-bold ph-download-simple mr-1"></i>
               Vocals
             </button>
             <button
-              onClick={() => onDownload(result.instrumentalUrl, `instrumental_${result.sourceName}`)}
+              onClick={() => {
+                const baseName = removeExtension(result.sourceName);
+                onDownload(result.instrumentalUrl, generateFilename('instrumental', baseName));
+              }}
               className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 text-sm">
               <i className="ph-bold ph-download-simple mr-1"></i>
               Instrumental
             </button>
             <button
-              onClick={() => onDownload(result.yoloMixUrl, `yolo_${result.sourceName}.wav`)}
+              onClick={() => {
+                const baseName = removeExtension(result.sourceName);
+                onDownload(result.yoloMixUrl, generateFilename('yolo', baseName));
+              }}
               className="px-3 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded hover:from-purple-500 hover:to-pink-500 text-sm font-semibold">
               <i className="ph-bold ph-magic-wand mr-1"></i>
               YOLO Mix

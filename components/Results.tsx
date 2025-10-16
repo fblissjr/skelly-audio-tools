@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { AudioSegment, WaveformData } from '../types';
 import Waveform from './Waveform';
 import { applyEffectsToSegment } from '../services/audioProcessor';
+import { generateFilename } from '../services/filenameUtils';
 
 
 // Inform TypeScript that JSZip is available globally from the script tag in index.html
@@ -225,8 +226,8 @@ const SegmentCard: React.FC<{
             const a = document.createElement('a');
             a.href = url;
             const downloadName = useRecombined
-                ? segment.name.replace('.wav', '_recombined.wav')
-                : segment.name;
+                ? generateFilename('recombined', segment.sourceTitle || sourceTitle || 'segment', segment.id)
+                : segment.name;  // Already has proper name from extractSegment
             a.download = downloadName;
             document.body.appendChild(a);
             a.click();
@@ -365,10 +366,11 @@ const SegmentCard: React.FC<{
 
 const Results: React.FC<{
     segments: AudioSegment[],
+    sourceTitle: string;
     onSegmentSettingsChange: (id: number, settings: Partial<Pick<AudioSegment, 'volume' | 'fadeInDuration' | 'fadeOutDuration'>>) => void;
     onSeparateVocals?: (segmentId: number, segmentFile: File) => Promise<void>;
     globalInstrumentalFile?: File | null;
-}> = ({ segments, onSegmentSettingsChange, onSeparateVocals, globalInstrumentalFile }) => {
+}> = ({ segments, sourceTitle, onSegmentSettingsChange, onSeparateVocals, globalInstrumentalFile }) => {
   const [isZipping, setIsZipping] = useState(false);
 
   const handleDownloadAll = async () => {
@@ -395,7 +397,7 @@ const Results: React.FC<{
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'Bob_the_Skelly_Clips.zip';
+      a.download = generateFilename('segments_zip', sourceTitle || 'segments');
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

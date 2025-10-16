@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import FileUpload from './FileUpload';
 import ProcessingIndicator from './ProcessingIndicator';
+import { generateFilename, removeExtension } from '../services/filenameUtils';
 
 interface VocalSeparationProps {
   onVocalsExtracted?: (vocalsFile: File, instrumentalFile: File) => void;
@@ -71,8 +72,9 @@ const VocalSeparation: React.FC<VocalSeparationProps> = ({ onVocalsExtracted, au
         throw new Error('Failed to extract files from ZIP');
       }
 
-      const vocalsFile = new File([vocalsBlob], 'vocals.wav', { type: 'audio/wav' });
-      const instrumentalFile = new File([instrumentalBlob], 'instrumental.wav', { type: 'audio/wav' });
+      const baseName = removeExtension(fileName);
+      const vocalsFile = new File([vocalsBlob], generateFilename('vocals', baseName), { type: 'audio/wav' });
+      const instrumentalFile = new File([instrumentalBlob], generateFilename('instrumental', baseName), { type: 'audio/wav' });
 
       setSeparatedFiles({ vocals: vocalsFile, instrumental: instrumentalFile });
 

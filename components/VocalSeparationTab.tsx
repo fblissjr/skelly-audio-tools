@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { generateFilename, removeExtension } from '../services/filenameUtils';
 import FileUpload from './FileUpload';
 import BatchYoloProcessor from './BatchYoloProcessor';
 
@@ -170,8 +171,9 @@ const VocalSeparationTab: React.FC = () => {
       const vocalsBlob = await zipContent.file('vocals.wav').async('blob');
       const instrumentalBlob = await zipContent.file('instrumental.wav').async('blob');
 
-      const vocalsFile = new File([vocalsBlob], 'vocals.wav', { type: 'audio/wav' });
-      const instrumentalFile = new File([instrumentalBlob], 'instrumental.wav', { type: 'audio/wav' });
+      const baseName = audioFile?.name ? removeExtension(audioFile.name) : 'audio';
+      const vocalsFile = new File([vocalsBlob], generateFilename('vocals', baseName), { type: 'audio/wav' });
+      const instrumentalFile = new File([instrumentalBlob], generateFilename('instrumental', baseName), { type: 'audio/wav' });
 
       setSeparatedFiles({ vocals: vocalsFile, instrumental: instrumentalFile });
 
@@ -226,7 +228,8 @@ const VocalSeparationTab: React.FC = () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'separated_audio.zip';
+        const baseName = audioFile?.name ? removeExtension(audioFile.name) : 'audio';
+        a.download = generateFilename('separated_zip', baseName);
         a.click();
         URL.revokeObjectURL(url);
       });
@@ -386,7 +389,8 @@ const VocalSeparationTab: React.FC = () => {
                       onClick={() => {
                         const a = document.createElement('a');
                         a.href = yoloMixUrl;
-                        a.download = 'yolo_mix_skelly_ready.wav';
+                        const baseName = audioFile?.name ? removeExtension(audioFile.name) : 'audio';
+                        a.download = generateFilename('yolo', baseName);
                         a.click();
                       }}
                       className="px-3 py-1 bg-purple-600 text-white rounded-md hover:bg-purple-500 transition-colors text-sm font-semibold">

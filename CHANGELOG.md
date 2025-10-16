@@ -2,6 +2,45 @@
 
 All notable changes to Skelly Audio Tools will be documented in this file.
 
+## 1.1.2
+
+### Added
+- **Metadata-Based Filename Generation**: All downloads now use meaningful filenames
+  - Master track: `{title}_full_processed.wav`
+  - Segments: `{title}_segment_01.wav`, `{title}_segment_02.wav`
+  - Recombined: `{title}_segment_01_recombined.wav`
+  - Vocals: `{title}_vocals.wav`
+  - Instrumental: `{title}_instrumental.wav`
+  - YOLO Mix: `{title}_yolo_mix.wav`
+  - ZIP archives: `{title}_segments.zip`, `{title}_separated.zip`
+
+- **Intelligent Title Capture**:
+  - YouTube downloads use video title
+  - Uploaded files use filename
+  - History loads use stored title
+  - Fallback to generic names when no metadata available
+
+- **Filename Utilities** (`services/filenameUtils.ts`):
+  - `sanitizeFilename()` - Removes invalid characters, limits length to 200 chars
+  - `generateFilename()` - Standardized naming for all file types
+  - `getSourceTitle()` - Extracts title from available metadata
+  - Extension handling utilities
+
+- **Documentation**:
+  - Created `internal/FILENAME_REFACTOR_SUMMARY.md` - Complete specification
+  - Created `internal/FILENAME_REFACTOR_STATUS.md` - Implementation guide
+
+### Improved
+- **User Experience**: Downloaded files now have meaningful, descriptive names
+- **Organization**: Easy to identify files by source material
+- **Consistency**: All filename generation follows same patterns
+
+### Technical Details
+- Added `sourceTitle` field to `AudioSegment` type
+- Updated all audio processing functions to accept and propagate titles
+- Modified all download handlers to use standardized naming
+- Filename sanitization prevents filesystem errors
+
 ## 1.1.1
 
 ### Added
