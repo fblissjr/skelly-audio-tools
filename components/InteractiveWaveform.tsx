@@ -80,6 +80,12 @@ const InteractiveWaveform: React.FC<InteractiveWaveformProps> = ({ audioUrl, onR
         wsRegions.getRegions().forEach(r => {
             if (r.id !== region.id) r.remove();
         });
+        // Style the region for better visibility
+        region.setOptions({
+            color: 'rgba(34, 211, 238, 0.4)', // cyan-500 with more opacity
+            drag: true,
+            resize: true,
+        });
         onRegionChangeRef.current(region);
     });
 
@@ -89,7 +95,9 @@ const InteractiveWaveform: React.FC<InteractiveWaveformProps> = ({ audioUrl, onR
 
     ws.on('ready', () => {
         setIsReady(true);
-        wsRegions.enableDragSelection({});
+        wsRegions.enableDragSelection({
+            color: 'rgba(34, 211, 238, 0.3)', // cyan-500 with opacity
+        });
         drawOverlay(ws);
     });
 
@@ -97,7 +105,11 @@ const InteractiveWaveform: React.FC<InteractiveWaveformProps> = ({ audioUrl, onR
     ws.on('zoom', () => drawOverlay(ws));
 
     return () => {
-      ws.destroy();
+      try {
+        ws.destroy();
+      } catch (e) {
+        // Ignore AbortError on cleanup
+      }
     };
   }, []); // Empty dependency array ensures this runs only once
 

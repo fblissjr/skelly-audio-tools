@@ -65,6 +65,7 @@ const SegmentCard: React.FC<{
     const [isDownloading, setIsDownloading] = useState(false);
     const [isSeparating, setIsSeparating] = useState(false);
     const [useRecombined, setUseRecombined] = useState(false);
+    const [vocalVolume, setVocalVolume] = useState(1.0); // 1.0 = 100%
 
     useEffect(() => {
         if (audioRef.current) {
@@ -145,7 +146,7 @@ const SegmentCard: React.FC<{
 
             for (let i = 0; i < maxLength; i++) {
                 let sample = 0;
-                if (vocalsData && i < vocalsBuffer.length) sample += vocalsData[i];
+                if (vocalsData && i < vocalsBuffer.length) sample += vocalsData[i] * vocalVolume;
                 if (instData && i < instrumentalBuffer.length) sample += instData[i];
                 mixedData[i] = sample;
             }
@@ -316,7 +317,7 @@ const SegmentCard: React.FC<{
 
                 {/* Recombination Toggle */}
                 {segment.isSeparated && (segment.instrumentalBlobUrl || globalInstrumentalFile) && (
-                    <div className="p-3 bg-slate-700/50 rounded-md">
+                    <div className="p-3 bg-slate-700/50 rounded-md space-y-3">
                         <label className="flex items-center justify-between cursor-pointer">
                             <span className="text-sm text-slate-300 flex items-center">
                                 <i className="ph-bold ph-disc mr-2 text-purple-400"></i>
@@ -329,7 +330,22 @@ const SegmentCard: React.FC<{
                                 className="w-4 h-4 text-purple-600 bg-slate-700 border-slate-600 rounded focus:ring-purple-500 focus:ring-2"
                             />
                         </label>
-                        <p className="text-xs text-slate-500 mt-1">Download with instrumental track mixed back in</p>
+                        <p className="text-xs text-slate-500">Download with instrumental track mixed back in</p>
+
+                        {useRecombined && (
+                            <div className="pt-2 border-t border-slate-600">
+                                <EffectSlider
+                                    label="Vocal Volume"
+                                    icon="ph-microphone"
+                                    value={vocalVolume * 100}
+                                    max={200}
+                                    step={1}
+                                    unit="%"
+                                    onChange={(val) => setVocalVolume(val / 100)}
+                                />
+                                <p className="text-xs text-slate-500 mt-1">Adjust vocal level in the mix</p>
+                            </div>
+                        )}
                     </div>
                 )}
 

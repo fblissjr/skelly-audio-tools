@@ -7,6 +7,8 @@ interface VocalSeparationProps {
   audioFile?: File | null; // Optional pre-loaded audio file
 }
 
+const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL?.replace('/get-audio-url', '') || 'http://localhost:8000';
+
 const VocalSeparation: React.FC<VocalSeparationProps> = ({ onVocalsExtracted, audioFile }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ const VocalSeparation: React.FC<VocalSeparationProps> = ({ onVocalsExtracted, au
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://localhost:8000/separate-vocals", {
+      const response = await fetch(`${BACKEND_BASE_URL}/separate-vocals`, {
         method: "POST",
         body: formData,
       });

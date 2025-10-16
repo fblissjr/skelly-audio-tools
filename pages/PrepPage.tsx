@@ -15,6 +15,8 @@ import VocalSeparation from '../components/VocalSeparation';
 import MasterTrackEditor from '../components/MasterTrackEditor';
 import type { Region } from 'wavesurfer.js/dist/plugins/regions.esm.js';
 
+const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL?.replace('/get-audio-url', '') || 'http://localhost:8000';
+
 const PrepPage: React.FC = () => {
   // Input state
   const [inputType, setInputType] = useState<'upload' | 'youtube'>('youtube');
@@ -58,12 +60,15 @@ const PrepPage: React.FC = () => {
     setMasterTrackFile(null);
   }, [youtube]);
 
-  const processAndLoadAudio = useCallback(async (audioFile: File) => {
+  const processAndLoadAudio = useCallback(async (audioFile: File, skipResetSeparation = false) => {
     try {
       const buffer = await getAudioInfo(audioFile);
       setRawAudioBuffer(buffer);
       const master = await processFullTrack(buffer, processingOptions);
       setMasterTrack(master);
+      if (skipResetSeparation) {
+        setSeparationDecision('skipped');
+      }
     } catch (err: any) {
       setError(`Failed to load audio: ${err.message}`);
       resetState();
@@ -164,7 +169,7 @@ const PrepPage: React.FC = () => {
       const formData = new FormData();
       formData.append("file", segmentFile);
 
-      const response = await fetch("http://localhost:8000/separate-vocals", {
+      const response = await fetch(`${BACKEND_BASE_URL}/separate-vocals`, {
         method: "POST",
         body: formData,
       });
@@ -329,10 +334,12 @@ const PrepPage: React.FC = () => {
             <div className="p-6">
               <VocalSeparation
                 audioFile={masterTrackFile}
-                onVocalsExtracted={(vocalsFile, instrumentalFileFromSeparation) => {
-                  setSeparationDecision('skipped');
+                onVocalsExtracted={async (vocalsFile, instrumentalFileFromSeparation) => {
                   setInstrumentalFile(instrumentalFileFromSeparation);
-                  handleFileLoad(vocalsFile);
+                  setMasterTrackFile(vocalsFile);
+                  setIsProcessing(true);
+                  await processAndLoadAudio(vocalsFile, true);
+                  setIsProcessing(false);
                 }}
               />
             </div>
