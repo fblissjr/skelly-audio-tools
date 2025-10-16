@@ -9,6 +9,7 @@ Skelly Audio Tools is a full-stack web application for preparing audio files for
 ./setup.sh      # Interactive configuration wizard
 ./start.sh dev  # Start development environment
 ```
+**New user?** See [Quick Start Guide](docs/QUICKSTART.md) for 5-minute setup
 
 **📖 Documentation:**
 - [CHANGELOG.md](CHANGELOG.md) - Version history
