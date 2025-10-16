@@ -1,5 +1,10 @@
 """
 Backend vocal separator - wraps the vocal_model package for FastAPI integration.
+
+Supports multiple inference backends:
+- ONNX Runtime (2-5x faster on CPU, recommended)
+- PyTorch CPU (fallback)
+- Remote CUDA server (optional)
 """
 import sys
 import os
@@ -13,22 +18,89 @@ backend_dir = Path(__file__).parent
 project_root = backend_dir.parent
 sys.path.insert(0, str(project_root))
 
+# Try to import ONNX separator first (faster)
+try:
+    from vocal_model.separator_onnx import ONNXVocalSeparator
+    ONNX_AVAILABLE = True
+except ImportError:
+    ONNX_AVAILABLE = False
+
 from vocal_model.separator import VocalSeparator as VocalModelSeparator
 
-class VocalSeparator:
-    """Wrapper around vocal_model.VocalSeparator for backend use."""
+# Try to import remote CUDA separator
+try:
+    from separator_remote import RemoteCUDAVocalSeparator
+    REMOTE_CUDA_AVAILABLE = True
+except ImportError:
+    REMOTE_CUDA_AVAILABLE = False
 
-    def __init__(self, model_path: str = None, config_path: str = None, quantized: bool = False):
+
+class VocalSeparator:
+    """Wrapper around vocal_model separator with multiple backend options."""
+
+    def __init__(
+        self,
+        model_path: str = None,
+        config_path: str = None,
+        quantized: bool = False,
+        use_onnx: bool = True,
+        num_threads: int = None,
+        remote_cuda_url: str = None
+    ):
         """
-        Initialize the vocal separator.
+        Initialize the vocal separator with optimizations.
 
         Args:
-            model_path: Path to the safetensors model file. If None, uses BS-Roformer by default.
-            config_path: Path to config file. If None, auto-detects based on model.
-            quantized: Whether to use the quantized model (faster on CPU).
+            model_path: Path to model file (.safetensors for PyTorch, .onnx for ONNX).
+            config_path: Path to config file. Auto-detects if None.
+            quantized: Use quantized model (faster, slightly lower quality).
+            use_onnx: Prefer ONNX Runtime if available (2-5x faster).
+            num_threads: CPU threads to use. Auto-detects if None.
+            remote_cuda_url: URL of remote CUDA server (e.g., http://gpu-server:8001).
         """
-        if model_path is None:
-            # Default to Tommy's Mel-Band RoFormer (12 layers, better quality)
+        self.backend_type = "unknown"
+
+        # Try remote CUDA first if URL provided
+        if remote_cuda_url and REMOTE_CUDA_AVAILABLE:
+            try:
+                print(f"Attempting remote CUDA server: {remote_cuda_url}")
+                self.separator = RemoteCUDAVocalSeparator(remote_cuda_url)
+                self.backend_type = "remote-cuda"
+                print("Remote CUDA separator configured successfully!")
+                print("Expected speedup: 5-10x faster than CPU")
+                return
+            except Exception as e:
+                print(f"Remote CUDA initialization failed: {e}")
+                print("Falling back to local processing...")
+
+        # Optimize PyTorch for CPU inference
+        if num_threads is None:
+            num_threads = os.cpu_count()
+
+        torch.set_num_threads(num_threads)
+        torch.set_num_interop_threads(num_threads)
+
+        # Try ONNX first if requested and available
+        if use_onnx and ONNX_AVAILABLE:
+            try:
+                print(f"Attempting ONNX Runtime (quantized={quantized}, threads={num_threads})...")
+                self.separator = ONNXVocalSeparator(
+                    onnx_model_path=model_path if model_path and model_path.endswith('.onnx') else None,
+                    config_path=config_path,
+                    use_quantized=quantized,
+                    num_threads=num_threads
+                )
+                self.backend_type = "onnx"
+                print("ONNX Runtime vocal separator loaded successfully!")
+                print("Expected speedup: 2-5x faster than PyTorch CPU")
+                return
+            except (FileNotFoundError, Exception) as e:
+                print(f"ONNX initialization failed: {e}")
+                print("Falling back to PyTorch CPU...")
+
+        # Fallback to PyTorch
+        if model_path is None or not model_path.endswith('.safetensors'):
+            # Default to Tommy's Mel-Band RoFormer
             model_path = project_root / "vocal_model" / "model_vocals_tommy.safetensors"
 
         if not os.path.exists(model_path):
@@ -47,13 +119,14 @@ class VocalSeparator:
             else:
                 config_path = project_root / "vocal_model" / "config.yaml"
 
-        print(f"Loading vocal separator (quantized={quantized})...")
+        print(f"Loading PyTorch vocal separator (threads={num_threads})...")
         self.separator = VocalModelSeparator(
             model_path=str(model_path),
             config_path=str(config_path),
-            device="cpu"  # Force CPU for backend deployment
+            device="cpu"
         )
-        print("Vocal separator loaded successfully!")
+        self.backend_type = "pytorch"
+        print("PyTorch vocal separator loaded successfully!")
 
     def separate(self, audio_path: str) -> tuple[str, str, int]:
         """

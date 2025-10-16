@@ -1,4 +1,5 @@
 import type { AudioSegment, ProcessedAudioResult, WaveformData } from '../types';
+import { generateFilename } from './filenameUtils';
 
 const WAVEFORM_WIDTH = 400; // width in samples for segment waveforms
 const FULL_WAVEFORM_WIDTH = 800; // width for the full track preview
@@ -87,10 +88,12 @@ async function applyProcessingEffects(
     inputBuffer: AudioBuffer,
     options: { normalizationDb: number; compressionPreset: string; noiseGateThreshold?: number; }
 ): Promise<AudioBuffer> {
+    console.log('[AudioProcessor] Applying processing effects', options);
     let buffer = inputBuffer;
 
     // Apply noise gate first, if specified
     if (options.noiseGateThreshold && options.noiseGateThreshold > -100) {
+        console.log('[AudioProcessor] Applying noise gate at', options.noiseGateThreshold, 'dB');
         buffer = applyNoiseGate(buffer, options.noiseGateThreshold);
     }
 
@@ -105,6 +108,7 @@ async function applyProcessingEffects(
 
     const targetAmplitude = 10 ** (options.normalizationDb / 20);
     const gainValue = peak > 0 ? targetAmplitude / peak : 1;
+    console.log('[AudioProcessor] Normalization: peak =', peak.toFixed(4), 'gain =', gainValue.toFixed(4));
 
     const offlineContext = new OfflineAudioContext(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
     const source = offlineContext.createBufferSource();
@@ -162,32 +166,58 @@ function applyNoiseGate(buffer: AudioBuffer, thresholdDb: number): AudioBuffer {
 
 export async function processFullTrack(
     rawBuffer: AudioBuffer,
-    processingOptions: { normalizationDb: number; compressionPreset: string; }
+    processingOptions: { normalizationDb: number; compressionPreset: string; },
+    sourceTitle?: string,
+    onProgress?: (message: string) => void
 ): Promise<AudioSegment> {
+    onProgress?.('Analyzing audio...');
+    console.log('[AudioProcessor] Starting full track processing', {
+        duration: rawBuffer.duration,
+        channels: rawBuffer.numberOfChannels,
+        sampleRate: rawBuffer.sampleRate,
+        options: processingOptions
+    });
+
+    onProgress?.('Applying normalization and compression...');
     const processedBuffer = await applyProcessingEffects(rawBuffer, processingOptions);
+    console.log('[AudioProcessor] Processing effects applied');
+
+    onProgress?.('Generating waveform data...');
+    const originalWaveform = generateWaveformData(rawBuffer, FULL_WAVEFORM_WIDTH);
+    const processedWaveform = generateWaveformData(processedBuffer, FULL_WAVEFORM_WIDTH);
+    console.log('[AudioProcessor] Waveform data generated');
+
+    onProgress?.('Converting to WAV format...');
     const wavBlob = bufferToWav(processedBuffer);
     const blobUrl = URL.createObjectURL(wavBlob);
+    console.log('[AudioProcessor] Full track processing complete');
+
+    const filename = sourceTitle
+        ? generateFilename('master', sourceTitle)
+        : 'Master_Track.wav';
 
     return {
         id: 0,
-        name: `Master_Track.wav`,
+        name: filename,
         blobUrl: blobUrl,
         duration: processedBuffer.duration,
         startTime: 0,
-        originalWaveform: generateWaveformData(rawBuffer, FULL_WAVEFORM_WIDTH),
-        processedWaveform: generateWaveformData(processedBuffer, FULL_WAVEFORM_WIDTH),
+        originalWaveform,
+        processedWaveform,
         volume: 1.0,
         fadeInDuration: 0,
         fadeOutDuration: 0,
+        sourceTitle,
     };
 }
 
 export async function extractSegment(
     processedMasterBuffer: AudioBuffer,
-    options: { 
+    options: {
         startTime: number;
         endTime: number;
         segmentId: number;
+        sourceTitle?: string;
     }
 ): Promise<AudioSegment> {
     const { startTime, endTime, segmentId } = options;
@@ -212,9 +242,13 @@ export async function extractSegment(
     const wavBlob = bufferToWav(slicedBuffer);
     const blobUrl = URL.createObjectURL(wavBlob);
 
+    const filename = options.sourceTitle
+        ? generateFilename('segment', options.sourceTitle, segmentId)
+        : `Segment_${String(segmentId + 1).padStart(2, '0')}.wav`;
+
     return {
         id: segmentId,
-        name: `Segment_${String(segmentId + 1).padStart(2, '0')}.wav`,
+        name: filename,
         blobUrl: blobUrl,
         duration: duration,
         startTime: startTime,
@@ -223,11 +257,13 @@ export async function extractSegment(
         volume: 1.0,
         fadeInDuration: 0,
         fadeOutDuration: 0,
+        sourceTitle: options.sourceTitle,
     };
 }
 
 export async function autoSplitTrack(
-    processedMasterBuffer: AudioBuffer
+    processedMasterBuffer: AudioBuffer,
+    sourceTitle?: string
 ): Promise<AudioSegment[]> {
     const totalDuration = processedMasterBuffer.duration;
     const segmentDuration = 30;
@@ -244,6 +280,7 @@ export async function autoSplitTrack(
             startTime,
             endTime,
             segmentId: i,
+            sourceTitle,
         });
         segments.push(segment);
     }
@@ -251,8 +288,56 @@ export async function autoSplitTrack(
     return segments;
 }
 
+/**
+ * Analyzes audio buffer to determine jaw movement activation points
+ * Returns percentage of audio that would trigger mouth movement at given threshold
+ */
+export function analyzeJawMovement(buffer: AudioBuffer, threshold: number): {
+    activationPercentage: number;
+    peakAmplitude: number;
+    averageAmplitude: number;
+    activationPoints: number; // Number of samples above threshold
+} {
+    const channelData = buffer.getChannelData(0); // Use first channel
+    let activationPoints = 0;
+    let peakAmplitude = 0;
+    let sumAmplitude = 0;
+
+    for (let i = 0; i < channelData.length; i++) {
+        const abs = Math.abs(channelData[i]);
+        sumAmplitude += abs;
+
+        if (abs > peakAmplitude) {
+            peakAmplitude = abs;
+        }
+
+        if (abs >= threshold) {
+            activationPoints++;
+        }
+    }
+
+    const activationPercentage = (activationPoints / channelData.length) * 100;
+    const averageAmplitude = sumAmplitude / channelData.length;
+
+    console.log('[AudioProcessor] Jaw movement analysis:', {
+        threshold,
+        activationPercentage: activationPercentage.toFixed(2) + '%',
+        peakAmplitude: peakAmplitude.toFixed(4),
+        averageAmplitude: averageAmplitude.toFixed(4),
+        activationPoints,
+        totalSamples: channelData.length
+    });
+
+    return {
+        activationPercentage,
+        peakAmplitude,
+        averageAmplitude,
+        activationPoints
+    };
+}
+
 export async function applyEffectsToSegment(
-    originalBlobUrl: string, 
+    originalBlobUrl: string,
     effects: { volume: number; fadeInDuration: number; fadeOutDuration: number; }
 ): Promise<Blob> {
     const { volume, fadeInDuration, fadeOutDuration } = effects;

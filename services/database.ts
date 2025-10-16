@@ -52,6 +52,13 @@ export async function getAllAudioMetadata(): Promise<Omit<AudioHistoryRecord, 'd
   return allRecords.reverse().map(({ data, ...metadata }) => metadata);
 }
 
+// Returns all audio records (for batch processing)
+export async function getAllAudioRecords(): Promise<AudioHistoryRecord[]> {
+  const db = await getDb();
+  const allRecords = await db.getAllFromIndex(STORE_NAME, 'timestamp');
+  return allRecords.reverse();
+}
+
 export async function deleteAudio(id: string): Promise<void> {
   const db = await getDb();
   await db.delete(STORE_NAME, id);

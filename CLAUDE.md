@@ -2,13 +2,39 @@
 
 ## Project Overview
 
-Skelly Audio Tools is a full-stack web application designed to prepare audio files for the "Skelly" animatronic device. The system processes audio to create perfectly synchronized mouth movements by:
+Skelly Audio Tools is a full-stack web application designed to prepare audio files for the "Skelly" animatronic device. The system processes audio to create perfectly synchronized mouth movements.
+
+**🚀 Quick Start:**
+```bash
+./setup.sh      # Interactive configuration wizard
+./start.sh dev  # Start development environment
+```
+
+**📖 Documentation Index:**
+- [CHANGELOG.md](CHANGELOG.md) - Version history and release notes
+- [Internal Documentation](internal/README.md) - Complete documentation index
+  - **Backend:**
+    - [Job Management](internal/backend/JOB_MANAGEMENT.md) - Track and cancel operations
+    - [Caching System](internal/backend/CACHING_SYSTEM.md) - Two-layer caching architecture
+    - [Testing with Cache](internal/backend/TESTING_CACHE.md) - Test using cached files
+  - **Performance & Optimization:**
+    - [Quick Start](internal/vocal_model/OPTIMIZATION_README.md) - ONNX/CUDA optimization guide
+    - [Detailed Guide](internal/vocal_model/PERFORMANCE_OPTIMIZATION.md) - Complete optimization docs
+    - [Technical Summary](internal/vocal_model/OPTIMIZATION_SUMMARY.md) - Performance benchmarks
+  - **User Experience:**
+    - [UX Improvements v1.0.2](internal/ux/UX_IMPROVEMENTS_1.0.2.md) - Major UI/UX overhaul (placeholder)
+  - **Hardware:**
+    - [Skelly Decor SVR Setup](internal/hardware/SKELLY_DECOR_SVR_SETUP.md) - iRig 2 recording (placeholder)
+
+## Core Workflow
 
 1. Loading audio from YouTube URLs or uploaded files
-2. Optionally separating vocals from instrumental tracks using AI
-3. Segmenting audio into individual mouth-movement chunks
-4. Processing each segment with normalization, compression, and noise gating
-5. Exporting segments in a format compatible with Skelly hardware
+2. Batch processing multiple files with automatic YOLO mode optimization
+3. AI-powered vocal separation using Mel-Band RoFormer model
+4. Smart mixing: vocals boosted to 120%, instrumental reduced to 25%
+5. Segmenting audio into individual mouth-movement chunks
+6. Processing each segment with normalization, compression, and noise gating
+7. Exporting segments individually with full cache management
 
 ## Architecture
 
@@ -46,17 +72,18 @@ skelly-audio-tools/
 │   ├── melband_roformer_vocals.safetensors  # Legacy model
 │   └── config.yaml             # Legacy config
 ├── pages/
-│   └── PrepPage.tsx            # Main audio preparation interface
+│   └── PrepPage.tsx            # Main app with tab navigation
 ├── components/
-│   ├── VocalSeparation.tsx     # AI vocal separator component
+│   ├── VocalSeparationTab.tsx  # Vocal separation with single/batch modes
+│   ├── BatchYoloProcessor.tsx  # [NEW] Batch queue processor with YOLO mode
 │   ├── MasterTrackEditor.tsx   # Waveform editor with region selection
-│   ├── Results.tsx             # Segment display and download
+│   ├── Results.tsx             # Segment display with vocal volume controls
 │   ├── FileUpload.tsx          # Drag-and-drop file upload
 │   └── ProcessingOptions.tsx   # Audio processing settings
 ├── services/
 │   ├── audioProcessor.ts       # Core audio processing logic
 │   ├── ffmpegService.ts        # Video-to-audio extraction
-│   └── database.ts             # IndexedDB wrapper
+│   └── database.ts             # IndexedDB with getAllAudioRecords()
 ├── hooks/
 │   └── useYouTube.ts           # YouTube audio fetching hook
 └── types.ts                    # TypeScript type definitions
@@ -64,7 +91,87 @@ skelly-audio-tools/
 
 ## Key Features & Workflows
 
-### 1. Audio Input Workflow
+### Tab-Based Navigation
+
+The app now uses a clean tab interface:
+
+1. **Audio Prep & Segmentation Tab**: Main workflow for audio loading and segmentation
+2. **Vocal Separation Studio Tab**: Dedicated tab for AI vocal separation with single/batch modes
+
+---
+
+### 1. Vocal Separation Studio (NEW!)
+
+#### Single File Mode
+
+**Step 1: Enable YOLO Mode (Optional)**
+- Toggle YOLO Mode checkbox for automatic optimization
+- YOLO Mode: Vocals at 120%, instrumental at 25%
+- Ensures Skelly's mouth moves primarily on vocals
+
+**Step 2: Upload Audio**
+- Drag & drop or select audio/video file
+- Processing happens automatically
+
+**Step 3: AI Processing**
+- Real-time progress indicators show:
+  - "Separating vocals from instrumental using AI..."
+  - "Extracting separated tracks from ZIP..."
+  - "Creating YOLO Mix..." (if enabled)
+- Shows elapsed time and processing stage
+
+**Step 4: Results**
+- If YOLO Mode enabled: Get "YOLO Mix - Ready for Skelly!" file
+- Individual tracks available: Vocals, Instrumental, Original
+- Volume controls for previewing each track (0-200%)
+- Download any track individually
+- Visual explanations of what's in each mix
+
+#### Batch Queue Mode (NEW!)
+
+**Step 1: Add Files to Queue**
+Multiple input methods:
+- **Upload Files**: Select multiple audio/video files
+- **YouTube Cache**: Add previously downloaded YouTube audio
+- **Mix & Match**: Combine files from any source
+
+**Step 2: Review Queue**
+Each item shows:
+- File name and type (file/youtube)
+- Status: Pending → Processing → Completed/Error
+- Real-time progress messages
+
+**Step 3: Start Processing**
+- Click "Start Processing" button
+- Queue processes automatically, one by one
+- Each file goes through full YOLO pipeline:
+  1. Load audio
+  2. Analyze original (calculate peak dB)
+  3. AI vocal separation
+  4. Analyze vocals (calculate peak dB)
+  5. Create YOLO mix (vocals 120%, instrumental 25%)
+  6. Analyze YOLO mix (calculate peak dB)
+
+**Step 4: Manage Results**
+For each processed file:
+- **Expandable cards** with stats
+- **Visual comparison**: Original vs Vocals vs YOLO Mix peak dB
+- **Four download options**:
+  - Original audio
+  - Vocals only
+  - Instrumental only
+  - YOLO Mix (Skelly-optimized!)
+- **Delete button**: Remove from results and free memory
+- **Processing time**: Shows how long it took
+
+**Queue Controls:**
+- Clear Completed: Remove finished items
+- Remove: Delete individual pending items
+- Delete: Remove processed results
+
+---
+
+### 2. Audio Prep & Segmentation Workflow
 
 **Step 1: Source Selection**
 - User chooses between YouTube URL or file upload
@@ -76,14 +183,7 @@ skelly-audio-tools/
   - Accepts audio files (MP3, WAV, M4A, etc.)
   - Accepts video files (MP4, MOV, etc.) and extracts audio via FFmpeg.js
 
-**Step 2: Optional Vocal Separation**
-- After audio loads, user can choose to separate vocals
-- Uses Mel-Band RoFormer AI model on backend
-- Returns ZIP with `vocals.wav` and `instrumental.wav`
-- Instrumental track is stored for later recombination
-- User can skip this step entirely
-
-**Step 3: Audio Segmentation**
+**Step 2: Audio Segmentation**
 - Manual mode: Select regions on waveform, add as segments
 - Auto mode: Automatically detect speech segments
 - Each segment gets:
@@ -92,15 +192,18 @@ skelly-audio-tools/
   - Optional noise gate
   - Fade in/out envelopes
 
-**Step 4: Per-Segment Vocal Separation (Optional)**
+**Step 3: Per-Segment Vocal Separation (Optional)**
 - Any individual segment can be separated after segmentation
 - Segment-specific instrumental track stored separately
 - Enables fine-tuned control over problematic segments
 
-**Step 5: Export**
-- Download individual segments or all as ZIP
-- Option to recombine vocals with instrumental
-- Formats: WAV (for Skelly) or original format
+**Step 4: Segment Management & Export**
+- Volume control per segment (0-200%)
+- Vocal volume control when recombining (0-200%)
+- Fade in/out adjustment
+- Download individual segments (no ZIP files!)
+- Delete unwanted segments
+- Recombine with instrumental option
 
 ## Technical Implementation
 
@@ -171,12 +274,12 @@ class VocalSeparator:
         # Creates temporary WAV files
 ```
 
-**Current Model (as of October 2025):**
+**Current Model (as of December 2024):**
 - **Tommy's 12-Layer Mel-Band RoFormer**
 - Source: [Aname-Tommy/Mel_Band_Roformer_Full_Scratch](https://huggingface.co/Aname-Tommy/Mel_Band_Roformer_Full_Scratch)
 - 12-layer transformer with 320 dimensions
-- 4x overlap for higher quality separation
-- Processing: ~65s for 20s audio on CPU
+- **2x overlap (optimized December 2024)** - 2x faster than 4x
+- Processing: ~32s for 20s audio on CPU
 - File: `vocal_model/model_vocals_tommy.safetensors` (692 MB)
 
 **Model Architecture:**
@@ -186,26 +289,112 @@ class VocalSeparator:
 - Much better separation quality than previous 6-layer model
 - See `docs/MODEL_UPGRADE_2025-10.md` for upgrade details
 
+**Performance Optimization:**
+- Changed `num_overlap: 4` to `num_overlap: 2` in `config_vocals_tommy.yaml`
+- 2x speed improvement with negligible quality loss
+- Before: ~65s for 20s audio | After: ~32s for 20s audio
+
+**Multiple Backend Support (v1.1.0):**
+- **ONNX Runtime**: 2-5x faster CPU inference (enabled by default)
+- **INT8 Quantization**: Additional 2-4x speedup with ~99% quality
+- **Remote CUDA**: 5-10x faster via remote GPU server
+- **Automatic Fallback**: Remote CUDA → ONNX → PyTorch CPU
+- See: [Optimization Quick Start](internal/vocal_model/OPTIMIZATION_README.md)
+
+**Environment Variables:**
+```bash
+USE_ONNX=1              # Enable ONNX Runtime (default: enabled)
+QUANTIZED=1             # Use INT8 quantized model
+CPU_THREADS=4           # Set CPU thread count
+REMOTE_CUDA_URL=http://gpu:8001  # Remote GPU server
+```
+
+**Performance Comparison (i5-6500, 4 cores):**
+| Backend | Time (20s audio) | Speedup |
+|---------|-----------------|---------|
+| PyTorch CPU | ~32s | 1x (baseline) |
+| ONNX Runtime | ~8-16s | 2-4x |
+| ONNX + INT8 | ~6-10s | 3-5x |
+| Remote CUDA | ~2-4s | 8-16x |
+
+---
+
+### YOLO Mode System (NEW!)
+
+YOLO Mode is an intelligent audio optimization system designed specifically for Skelly animatronic performances. It ensures mouth movements are triggered primarily by vocals, not background music.
+
+#### What YOLO Mode Does
+
+1. **AI Vocal Separation**: Uses Mel-Band RoFormer to isolate vocals from instrumental
+2. **Smart Mixing**:
+   - Vocals boosted to **120%** volume
+   - Instrumental reduced to **25%** volume
+   - Soft clipping applied to prevent distortion
+3. **Statistical Analysis**: Calculates peak dB for original, vocals, and YOLO mix
+4. **Visual Feedback**: Shows before/after comparison stats
+
+#### YOLO Mix Algorithm
+
+```typescript
+const createYoloMix = async (vocalsBuffer: AudioBuffer, instrumentalBuffer: AudioBuffer) => {
+  const vocalGain = 1.2;       // 120% boost
+  const instrumentalGain = 0.25; // 25% reduction
+
+  for (let channel = 0; channel < numberOfChannels; channel++) {
+    for (let i = 0; i < maxLength; i++) {
+      let sample = 0;
+      if (vocalsData) sample += vocalsData[i] * vocalGain;
+      if (instData) sample += instData[i] * instrumentalGain;
+
+      // Soft clipping prevents distortion
+      sample = Math.max(-1, Math.min(1, sample));
+      mixedData[i] = sample;
+    }
+  }
+};
+```
+
+#### When to Use YOLO Mode
+
+- **Songs with prominent instrumentals**: Ensures Skelly's mouth doesn't move during guitar solos or drum fills
+- **Background music scenes**: Vocals stay audible over music
+- **Batch processing**: Automatically optimizes multiple files with consistent settings
+- **Quick setup**: One-click optimization, no manual mixing required
+
+#### YOLO Mode Workflow
+
+**Single File:**
+1. Check "YOLO Mode" checkbox
+2. Upload audio file
+3. AI separates vocals (1-2 minutes)
+4. YOLO mix created automatically
+5. Download "YOLO Mix - Ready for Skelly!" file
+
+**Batch Queue:**
+1. Add multiple files to queue
+2. YOLO mode enabled by default
+3. Each file processes automatically:
+   - AI separation
+   - Statistical analysis
+   - YOLO mix creation
+4. Download individual YOLO mixes
+
 #### Frontend Integration
 
-**Component: `VocalSeparation.tsx`**
-- Auto-processes when `audioFile` prop is provided
-- Shows real-time processing timer
-- Extracts files from ZIP response using JSZip
-- Stores separated files as File objects
-- Callback to parent with extracted files
+**Component: `VocalSeparationTab.tsx`**
+- Single/Batch mode toggle
+- YOLO Mode checkbox with explanation
+- Real-time progress indicators:
+  - "Separating vocals from instrumental using AI..."
+  - "Creating YOLO Mix: Boosting vocals and reducing instrumental..."
+  - "Creating YOLO Mix: Converting to WAV..."
+- Stats display: Original vs Vocals vs YOLO Mix peak dB
 
-**Usage in PrepPage:**
-```typescript
-<VocalSeparation
-  audioFile={masterTrackFile}
-  onVocalsExtracted={(vocalsFile, instrumentalFile) => {
-    setSeparationDecision('skipped');
-    setInstrumentalFile(instrumentalFile);
-    handleFileLoad(vocalsFile);
-  }}
-/>
-```
+**Component: `BatchYoloProcessor.tsx`**
+- Queue management system
+- Per-file YOLO processing
+- Statistical comparison for each result
+- Individual download/delete controls
 
 ### YouTube Download & Caching System
 
@@ -409,9 +598,9 @@ Separates vocals from instrumental using AI model.
   - `instrumental.wav` - Music without vocals
 
 **Processing:**
-- Model: Mel-Band RoFormer
-- Mode: Set `QUANTIZED=1` env var for CPU optimization
-- Duration: ~1 minute per minute of audio on CPU
+- Model: Mel-Band RoFormer (12-layer, 2x overlap for speed)
+- CPU-optimized: ~32s for 20s audio (2x faster than 4x overlap)
+- Duration: ~1.5 minutes per minute of audio on CPU
 
 **Error Handling:**
 - 503: Model not loaded
@@ -423,7 +612,10 @@ Separates vocals from instrumental using AI model.
 
 **Path:** `pages/PrepPage.tsx`
 
-**Purpose:** Main orchestration component for entire workflow
+**Purpose:** Main app container with tab navigation system
+
+**State:**
+- `activeTab`: 'prep' | 'separation' - Controls which tab is visible
 
 **Key Functions:**
 - `handleFileLoad(file)` - Processes uploaded or fetched audio
@@ -433,30 +625,94 @@ Separates vocals from instrumental using AI model.
 - `handleSegmentSeparateVocals(segmentId, file)` - Separates individual segment
 
 **Render Flow:**
-1. Step 1: Input selection (YouTube/Upload) - always visible first
-2. Processing indicator during load
-3. Optional separation decision screen
-4. Step 2: Segmentation tools (after separation decision)
-5. Results display with download options
+1. Tab navigation (Audio Prep & Segmentation | Vocal Separation Studio)
+2. Conditional rendering based on activeTab
+3. Prep tab: Input selection → Segmentation → Results
+4. Separation tab: Single/Batch mode selection → Processing
 
-### VocalSeparation
+---
 
-**Path:** `components/VocalSeparation.tsx`
+### VocalSeparationTab (NEW!)
 
-**Props:**
+**Path:** `components/VocalSeparationTab.tsx`
+
+**Purpose:** Dual-mode vocal separation interface
+
+**State:**
+- `processingMode`: 'single' | 'batch' - Controls single file or batch queue mode
+- `yoloMode`: boolean - Enables YOLO auto-optimization
+- `processingStep`: string - Current processing step for progress display
+
+**Single File Mode Features:**
+- YOLO Mode toggle with clear explanation
+- Real-time progress with step-by-step messages
+- Vocal and instrumental volume controls (0-200%)
+- Individual track downloads
+- YOLO Mix preview with specs
+
+**Batch Mode:**
+- Renders `<BatchYoloProcessor />` component
+- See BatchYoloProcessor section below
+
+---
+
+### BatchYoloProcessor (NEW!)
+
+**Path:** `components/BatchYoloProcessor.tsx`
+
+**Purpose:** Queue-based batch processing system with YOLO auto-optimization
+
+**State:**
 ```typescript
-interface VocalSeparationProps {
-  audioFile?: File | null;  // Auto-process if provided
-  onVocalsExtracted?: (vocals: File, instrumental: File) => void;
+interface QueueItem {
+  id: string;
+  name: string;
+  type: 'file' | 'youtube';
+  status: 'pending' | 'processing' | 'completed' | 'error';
+  progress: string;
+  error?: string;
+  result?: ProcessedAudio;
+}
+
+interface ProcessedAudio {
+  id: string;
+  sourceName: string;
+  originalUrl: string;
+  vocalsUrl: string;
+  instrumentalUrl: string;
+  yoloMixUrl: string;
+  stats: {
+    originalPeakDb: number;
+    vocalsPeakDb: number;
+    yoloPeakDb: number;
+    processingTime: number;
+  };
 }
 ```
 
+**Key Functions:**
+- `addToQueue(sources)` - Add files/YouTube audio to queue
+- `processQueue()` - Process all pending items sequentially
+- `processItem(item)` - Full YOLO pipeline for one file:
+  1. Load audio
+  2. Calculate original peak dB
+  3. AI vocal separation
+  4. Calculate vocals peak dB
+  5. Create YOLO mix (vocals 120%, instrumental 25%)
+  6. Calculate YOLO mix peak dB
+- `calculateAudioStats(buffer)` - Measure peak amplitude in dB
+- `deleteResult(id)` - Remove result and revoke blob URLs
+- `downloadFile(url, filename)` - Download individual track
+
 **Features:**
-- Auto-processing via useEffect when audioFile provided
-- Real-time processing timer
-- ZIP extraction using JSZip
-- Download individual tracks
-- "Load Vocals" button to continue workflow
+- Multiple input sources: file upload, YouTube cache
+- YouTube history dropdown with "Add to Queue" buttons
+- Real-time queue status updates
+- Expandable result cards with stats comparison
+- Four download options per result
+- Individual file management (delete)
+- Queue controls (Start, Clear Completed, Remove)
+- Memory management via blob URL cleanup
 
 ### MasterTrackEditor
 
@@ -488,21 +744,32 @@ interface VocalSeparationProps {
 **Features per segment:**
 - Audio playback with WaveSurfer
 - Waveform visualization (original + processed)
-- Volume control
+- Volume control (0-200%)
+- **[NEW]** Vocal volume control (0-200%) when recombining
 - Fade in/out adjustment
 - "Separate Vocals" button (if not already separated)
 - "Recombine with Instrumental" toggle (if separated)
-- Download individual segment
+- Download individual segment (WAV format)
 - Delete segment
+
+**Vocal Volume Control (NEW!):**
+- Appears when "Recombine with Instrumental" is checked
+- Slider range: 0-200%
+- Default: 100%
+- Applied during `recombineAudio()` mixing:
+  ```typescript
+  sample += vocalsData[i] * vocalVolume;
+  ```
+- Allows fine-tuning vocal prominence in the mix
 
 **Download modes:**
 1. Vocals only (if separated)
-2. Recombined with instrumental (if checkbox enabled)
+2. Recombined with instrumental at custom vocal volume (if checkbox enabled)
 3. Original mix (if not separated)
 
 **Bulk actions:**
 - "Download All" - Creates ZIP with all segments
-- Respects recombination settings per segment
+- Respects recombination and vocal volume settings per segment
 
 ## Development Setup
 
@@ -684,21 +951,35 @@ function detectEnvelope(
 ### Backend
 
 1. **Vocal Separation:**
-   - CPU-bound: ~1 min processing per 1 min audio
-   - Memory: ~2GB for model + inference
-   - Use quantized model for 2-3x speedup on CPU
-   - Consider GPU deployment for production
+   - **CPU Performance (Optimized):**
+     - ~32 seconds for 20 seconds of audio
+     - ~1.5 minutes per 1 minute of audio
+     - Optimization: 2x overlap (down from 4x) for 2x speed boost
+     - Config: `vocal_model/config_vocals_tommy.yaml` - `num_overlap: 2`
+   - **Memory:** ~2GB for model + inference
+   - **Model:** Tommy's 12-layer Mel-Band RoFormer
+   - **Quality:** Still excellent with 2x overlap
+   - **GPU:** Would be ~5-10x faster, recommended for production
 
-2. **YouTube Caching:**
+2. **Batch Processing:**
+   - Processes files sequentially to avoid memory issues
+   - Each file: ~1.5 minutes per minute of audio
+   - Example: 8 files × 3 minutes each = ~36 minutes total
+   - Progress tracked per file with real-time updates
+   - Failed files don't stop the queue
+
+3. **YouTube Caching:**
    - First download: 5-30 seconds (depends on video)
-   - Cached access: <100ms
+   - Cached access: <100ms via IndexedDB
    - Storage: ~1-5MB per minute of audio
-   - Manual cleanup required for `.cache/` directory
+   - Backend cache: `.cache/` directory (manual cleanup)
+   - Frontend cache: IndexedDB (managed via delete buttons)
 
-3. **File Operations:**
+4. **File Operations:**
    - All I/O operations are async
    - Background cleanup of temporary files
-   - ZIP creation is CPU-bound but fast (<1s)
+   - No ZIP files in new workflow (individual downloads)
+   - Blob URL management for memory efficiency
 
 ## Troubleshooting
 
@@ -773,32 +1054,63 @@ QUANTIZED=1 uvicorn main:app --host 127.0.0.1 --port 8000
 
 ## Future Enhancements
 
+### Recent Features (December 2024)
+
+1. **✓ Tab-Based Navigation:**
+   - Clean separation between Vocal Separation and Audio Prep
+   - Easy switching between workflows
+   - No more confusing decision screens
+
+2. **✓ YOLO Mode:**
+   - Automatic vocal optimization (vocals 120%, instrumental 25%)
+   - Perfect for Skelly - mouth moves primarily on vocals
+   - Clear visual feedback on what's happening
+   - Stats show before/after comparison
+
+3. **✓ Batch Processing:**
+   - Queue system for processing multiple files
+   - Supports file upload + YouTube cache
+   - Sequential processing with progress tracking
+   - Individual file management (download/delete)
+
+4. **✓ Vocal Volume Control:**
+   - Adjust vocal level in recombined mixes (0-200%)
+   - Available in both segmentation and batch modes
+   - Real-time preview
+
+5. **✓ Performance Optimization:**
+   - 2x faster vocal separation (2x overlap instead of 4x)
+   - ~32 seconds for 20 seconds of audio
+   - No quality loss
+
+6. **✓ Individual Downloads:**
+   - No more ZIP files
+   - Download any track individually
+   - Better file management
+
 ### Planned Features
 
-1. **Multi-track Mixing:**
-   - Support for background music tracks
-   - Volume balancing between vocals and music
-   - Real-time preview of mix
-
-2. **Advanced Segmentation:**
+1. **Advanced Segmentation:**
    - Word-level segmentation using speech-to-text
    - Phoneme detection for precise mouth sync
    - Custom split points based on transcript
 
-3. **Export Formats:**
+2. **Export Formats:**
    - Direct export to Skelly hardware format
    - Metadata file with timing information
    - Project save/load functionality
 
-4. **Performance:**
+3. **Performance:**
    - Web Workers for audio processing
    - GPU acceleration for vocal separation (WebGPU)
    - Streaming processing for large files
+   - Parallel batch processing (multiple files at once)
 
-5. **UI/UX:**
+4. **UI/UX:**
    - Keyboard shortcuts for common actions
    - Undo/redo support
-   - Batch processing multiple files
+   - Drag & drop reordering in batch queue
+   - Batch download all results
 
 ### Known Limitations
 
@@ -809,19 +1121,20 @@ QUANTIZED=1 uvicorn main:app --host 127.0.0.1 --port 8000
 
 2. **File Size:**
    - Frontend processing limited by browser memory
-   - Recommend max 30 minutes of audio
+   - Recommend max 30 minutes of audio per file
    - Large files may cause browser to slow down
+   - Batch mode handles large queues well (sequential processing)
 
 3. **Vocal Separation:**
-   - CPU-only inference takes ~65s for 20s audio (October 2025 model)
+   - CPU-only inference: ~32s for 20s audio (optimized December 2024)
    - Quality depends on source material
    - Works best with clear vocals and instrumental separation
-   - Trade-off: 4.4x slower than legacy model but much better quality
+   - Sequential batch processing (one at a time to avoid memory issues)
 
 4. **Cache Management:**
-   - No automatic cleanup of `.cache/` directory
-   - No size limits on IndexedDB cache
-   - Manual intervention required for disk space
+   - Backend `.cache/` directory requires manual cleanup
+   - Frontend IndexedDB has delete buttons per result
+   - No automatic size limits (uses available browser storage)
 
 ## Credits
 

@@ -3,6 +3,7 @@ import { getAudioInfo, processFullTrack, extractSegment, autoSplitTrack } from '
 import { extractAudio } from '../services/ffmpegService';
 import type { AudioSegment } from '../types';
 import { useYouTube } from '../hooks/useYouTube';
+import { getSourceTitle } from '../services/filenameUtils';
 import Header from '../components/Header';
 import Instructions from '../components/Instructions';
 import FileUpload from '../components/FileUpload';
@@ -11,17 +12,21 @@ import ProcessingIndicator from '../components/ProcessingIndicator';
 import Results from '../components/Results';
 import { getAudio } from '../services/database';
 import YouTubeHistory from '../components/YouTubeHistory';
-import VocalSeparation from '../components/VocalSeparation';
+import VocalSeparationTab from '../components/VocalSeparationTab';
 import MasterTrackEditor from '../components/MasterTrackEditor';
 import type { Region } from 'wavesurfer.js/dist/plugins/regions.esm.js';
 
 const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_URL?.replace('/get-audio-url', '') || 'http://localhost:8000';
 
+type TabType = 'prep' | 'separation';
+
 const PrepPage: React.FC = () => {
+  // Tab state
+  const [activeTab, setActiveTab] = useState<TabType>('prep');
+
   // Input state
   const [inputType, setInputType] = useState<'upload' | 'youtube'>('youtube');
   const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [separationDecision, setSeparationDecision] = useState<'undecided' | 'separating' | 'skipped'>('undecided');
 
   // Core audio data state
   const [rawAudioBuffer, setRawAudioBuffer] = useState<AudioBuffer | null>(null);
@@ -29,6 +34,7 @@ const PrepPage: React.FC = () => {
   const [processedSegments, setProcessedSegments] = useState<AudioSegment[]>([]);
   const [instrumentalFile, setInstrumentalFile] = useState<File | null>(null);
   const [masterTrackFile, setMasterTrackFile] = useState<File | null>(null);
+  const [sourceTitle, setSourceTitle] = useState<string>('');
 
   // UI state
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -42,10 +48,12 @@ const PrepPage: React.FC = () => {
     compressionPreset: 'medium',
     noiseGateThreshold: -100, // Off by default
     jawSensitivity: 0.25, // Default activation threshold
+    showActivationOverlay: false, // Visualization overlay off by default
   });
 
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [extractionProgress, setExtractionProgress] = useState(0);
+  const [processingStep, setProcessingStep] = useState<string>('');
 
   const resetState = useCallback(() => {
     setRawAudioBuffer(null);
@@ -55,30 +63,40 @@ const PrepPage: React.FC = () => {
     youtube.reset();
     setIsExtracting(false);
     setExtractionProgress(0);
-    setSeparationDecision('undecided');
     setInstrumentalFile(null);
     setMasterTrackFile(null);
   }, [youtube]);
 
-  const processAndLoadAudio = useCallback(async (audioFile: File, skipResetSeparation = false) => {
+  const processAndLoadAudio = useCallback(async (audioFile: File) => {
     try {
+      console.log('[PrepPage] Starting audio processing', audioFile.name);
+      setProcessingStep('Decoding audio file...');
       const buffer = await getAudioInfo(audioFile);
+      console.log('[PrepPage] Audio decoded, buffer created');
       setRawAudioBuffer(buffer);
-      const master = await processFullTrack(buffer, processingOptions);
+
+      const master = await processFullTrack(buffer, processingOptions, sourceTitle, (message) => {
+        setProcessingStep(message);
+      });
       setMasterTrack(master);
-      if (skipResetSeparation) {
-        setSeparationDecision('skipped');
-      }
+      setProcessingStep('');
+      console.log('[PrepPage] Audio processing complete');
     } catch (err: any) {
+      console.error('[PrepPage] Audio processing failed:', err);
       setError(`Failed to load audio: ${err.message}`);
       resetState();
     }
-  }, [resetState, processingOptions]);
+  }, [resetState, processingOptions, sourceTitle]);
 
   const handleFileLoad = useCallback(async (file: File) => {
     resetState();
     setIsProcessing(true);
     setError(null);
+
+    // Capture source title from uploaded file (will be overridden by YouTube title if applicable)
+    if (!sourceTitle) {
+      setSourceTitle(getSourceTitle(undefined, file.name));
+    }
 
     let audioFileToProcess = file;
 
@@ -106,7 +124,24 @@ const PrepPage: React.FC = () => {
   const handleYouTubeFetch = async () => {
       const audioBuffer = await youtube.fetchAudio(youtubeUrl);
       if (audioBuffer) {
-          const file = new File([audioBuffer], "youtube_audio.mp3", { type: "audio/mpeg" });
+          // Extract video ID and get title from database
+          const videoIdMatch = youtubeUrl.match(/(?:v=|\/)([\w-]{11})/);
+          const videoId = videoIdMatch ? videoIdMatch[1] : null;
+
+          let title = 'youtube_audio';
+          if (videoId) {
+              try {
+                  const record = await getAudio(videoId);
+                  if (record?.title) {
+                      title = record.title;
+                  }
+              } catch (err) {
+                  console.warn('[PrepPage] Could not fetch title from database:', err);
+              }
+          }
+
+          setSourceTitle(getSourceTitle(title));
+          const file = new File([audioBuffer], `${title}.mp3`, { type: "audio/mpeg" });
           handleFileLoad(file);
       }
   };
@@ -115,6 +150,7 @@ const PrepPage: React.FC = () => {
     try {
         const record = await getAudio(id);
         if (record) {
+            setSourceTitle(getSourceTitle(record.title));
             const file = new File([record.data], `${record.title}.mp3`, { type: "audio/mpeg" });
             handleFileLoad(file);
         }
@@ -133,6 +169,7 @@ const PrepPage: React.FC = () => {
             startTime: selectedRegion.start,
             endTime: selectedRegion.end,
             segmentId: processedSegments.length,
+            sourceTitle,
         });
         setProcessedSegments(prev => [...prev, newSegment]);
     } catch (err: any) {
@@ -146,9 +183,9 @@ const PrepPage: React.FC = () => {
     setIsProcessing(true);
     try {
         const masterBuffer = await getAudioInfo(new File([await (await fetch(masterTrack.blobUrl)).blob()], masterTrack.name));
-        const segments = await autoSplitTrack(masterBuffer);
+        const segments = await autoSplitTrack(masterBuffer, sourceTitle);
         setProcessedSegments(segments);
-    } catch (err: any) { 
+    } catch (err: any) {
         setError(`Failed to auto-split: ${err.message}`);
     }
     setIsProcessing(false);
@@ -218,11 +255,48 @@ const PrepPage: React.FC = () => {
   return (
     <div className="max-w-4xl w-full mx-auto">
       <Header />
-      <main className="mt-8 space-y-12">
-        <Instructions />
 
-        {/* Step 1: Input Source Selection */}
-        {!masterTrack && !isProcessing && (
+      {/* Tab Navigation */}
+      <div className="mt-8 flex justify-center space-x-2 border-b border-slate-700">
+        <button
+          onClick={() => setActiveTab('prep')}
+          className={`px-6 py-3 font-semibold transition-all duration-200 relative ${
+            activeTab === 'prep'
+              ? 'text-orange-400'
+              : 'text-slate-400 hover:text-slate-300'
+          }`}>
+          <i className="ph-bold ph-scissors mr-2"></i>
+          Audio Prep & Segmentation
+          {activeTab === 'prep' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-red-600"></div>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('separation')}
+          className={`px-6 py-3 font-semibold transition-all duration-200 relative ${
+            activeTab === 'separation'
+              ? 'text-orange-400'
+              : 'text-slate-400 hover:text-slate-300'
+          }`}>
+          <i className="ph-bold ph-microphone mr-2"></i>
+          Vocal Separation Studio
+          {activeTab === 'separation' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-red-600"></div>
+          )}
+        </button>
+      </div>
+
+      <main className="mt-8 space-y-12">
+        {/* Vocal Separation Tab */}
+        {activeTab === 'separation' && <VocalSeparationTab />}
+
+        {/* Audio Prep & Segmentation Tab */}
+        {activeTab === 'prep' && (
+          <>
+            <Instructions />
+
+            {/* Step 1: Input Source Selection */}
+            {!masterTrack && !isProcessing && (
           <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
             <div className="p-6 space-y-6">
               <div className="text-center">
@@ -286,8 +360,18 @@ const PrepPage: React.FC = () => {
             <ProcessingIndicator
               text={isExtracting
                 ? `Extracting audio from video... (${extractionProgress}%)`
-                : (youtube.status === 'fetching' ? 'Fetching audio...' : 'Processing audio...')}
+                : (youtube.status === 'fetching'
+                    ? 'Fetching audio...'
+                    : (processingStep || 'Processing audio...'))}
             />
+            {processingStep && (
+              <div className="mt-4 text-center">
+                <p className="text-sm text-slate-400">
+                  Applying normalization: {processingOptions.normalizationDb}dB,
+                  compression: {processingOptions.compressionPreset}
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -303,51 +387,8 @@ const PrepPage: React.FC = () => {
           </div>
         )}
 
-        {/* Optional: Vocal Separation Decision (shown after audio is loaded) */}
-        {masterTrack && separationDecision === 'undecided' && (
-          <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
-            <div className="p-6 text-center space-y-4">
-              <div>
-                <h3 className="text-xl font-bold text-slate-200">Optional: Separate Vocals</h3>
-                <p className="text-slate-400 mt-2">Use AI to isolate vocals from music before segmentation</p>
-                <p className="text-sm text-slate-500 mt-1">This helps Skelly get cleaner vocal segments</p>
-              </div>
-              <div className="flex justify-center space-x-4">
-                <button
-                  onClick={() => setSeparationDecision('separating')}
-                  className="px-6 py-3 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-semibold rounded-lg transition-all duration-300 transform hover:scale-105">
-                  Separate Vocals
-                </button>
-                <button
-                  onClick={() => setSeparationDecision('skipped')}
-                  className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-slate-300 font-semibold rounded-lg transition-colors">
-                  Skip - Continue to Segmentation
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Vocal Separation UI */}
-        {masterTrack && separationDecision === 'separating' && (
-          <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
-            <div className="p-6">
-              <VocalSeparation
-                audioFile={masterTrackFile}
-                onVocalsExtracted={async (vocalsFile, instrumentalFileFromSeparation) => {
-                  setInstrumentalFile(instrumentalFileFromSeparation);
-                  setMasterTrackFile(vocalsFile);
-                  setIsProcessing(true);
-                  await processAndLoadAudio(vocalsFile, true);
-                  setIsProcessing(false);
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Audio Segmentation Tools (shown after audio is loaded and separation is skipped/completed) */}
-        {masterTrack && separationDecision === 'skipped' && (
+            {/* Step 2: Audio Segmentation Tools (shown after audio is loaded) */}
+            {masterTrack && (
           <div className="bg-slate-800/50 rounded-xl shadow-lg border border-slate-700">
             <div className="p-6 space-y-6">
               <div className="text-center border-b border-slate-700 pb-4">
@@ -365,6 +406,7 @@ const PrepPage: React.FC = () => {
                 isProcessing={isProcessing}
                 selectedRegion={selectedRegion}
                 activationThreshold={processingOptions.jawSensitivity}
+                showActivationOverlay={processingOptions.showActivationOverlay}
                 onRegionChange={setSelectedRegion}
                 onAddSegment={handleAddSegment}
                 onAutoSplit={handleAutoSplit}
@@ -374,15 +416,18 @@ const PrepPage: React.FC = () => {
           </div>
         )}
 
-        {processedSegments.length > 0 && (
-          <div className="animate-fade-in mt-12">
-            <Results
-              segments={processedSegments}
-              onSegmentSettingsChange={handleSegmentSettingsChange}
-              onSeparateVocals={handleSegmentSeparateVocals}
-              globalInstrumentalFile={instrumentalFile}
-            />
-          </div>
+            {processedSegments.length > 0 && (
+              <div className="animate-fade-in mt-12">
+                <Results
+                  segments={processedSegments}
+                  sourceTitle={sourceTitle}
+                  onSegmentSettingsChange={handleSegmentSettingsChange}
+                  onSeparateVocals={handleSegmentSeparateVocals}
+                  globalInstrumentalFile={instrumentalFile}
+                />
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

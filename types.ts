@@ -16,6 +16,8 @@ export interface AudioSegment {
   isSeparated?: boolean;
   instrumentalBlobUrl?: string;
   originalMixBlobUrl?: string; // Store original before separation
+  // Source metadata for filename generation
+  sourceTitle?: string; // YouTube title or uploaded filename (sanitized)
 }
 
 export interface ProcessedAudioResult {

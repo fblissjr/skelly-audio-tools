@@ -1,0 +1,16 @@
+# Performance Optimization Dependencies
+# Install with: uv pip install -r requirements-optimization.txt
+
+# ONNX Runtime - 2-5x faster CPU inference
+onnxruntime>=1.16.0
+
+# ONNX tools for model optimization and quantization
+onnx>=1.15.0
+
+# Quantization support (optional, for INT8 models)
+# Provides additional 2-4x speedup with minimal quality loss
+onnxruntime-tools>=1.7.0
+
+# Remote CUDA client (optional)
+# For offloading to remote GPU server
+httpx>=0.25.0
